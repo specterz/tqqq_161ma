@@ -1,0 +1,123 @@
+//@version=6
+// =============================================================================
+// AGITQ 161-day MA TQQQ strategy — TradingView backtest
+// -----------------------------------------------------------------------------
+// Rules (from the r/TQQQ "ultimate TQQQ strategy" post):
+//   * Signal is driven by QQQ, NOT by TQQQ.
+//   * QQQ closes ABOVE its 161-day SMA  -> hold TQQQ.
+//   * QQQ closes BELOW its 161-day SMA  -> exit to cash.
+//   * Overheated: QQQ > MA * (1 + 5%)   -> block NEW entries (ballast). An
+//                                          existing TQQQ position keeps riding
+//                                          until QQQ drops back below the MA.
+//
+// HOW TO USE
+//   1. Open a TQQQ chart on the Daily (1D) timeframe.
+//   2. Open the Pine Editor, paste this whole file, click "Add to chart".
+//   3. Open the "Strategy Tester" tab to see net profit, drawdown, trades.
+//   4. Optional: tune MA length / overheated band via the strategy's gear icon.
+//
+// WHY request.security(): the strategy trades the chart symbol (TQQQ) but the
+// signal must come from QQQ's own 161-day average, so we fetch QQQ separately.
+// =============================================================================
+
+strategy(
+     title                   = "AGITQ 161MA (QQQ signal, trade TQQQ)",
+     overlay                 = true,
+     initial_capital         = 10000,
+     default_qty_type        = strategy.percent_of_equity,
+     default_qty_value       = 100,
+     commission_type         = strategy.commission.percent,
+     commission_value        = 0.0,
+     calc_on_every_tick      = false,
+     process_orders_on_close = true)
+
+// --- Timeframe guard ---------------------------------------------------------
+// This strategy is designed for the DAILY chart. On weekly/monthly there are
+// too few bars (you'll see only a handful of trades); on intraday it's noisy.
+// A wrong timeframe is the #1 cause of "why so few trades?". Warn loudly.
+if not timeframe.isdaily and barstate.islast
+    runtime.error("Apply this strategy on the DAILY (1D) timeframe. Current "
+         + "timeframe is '" + timeframe.period + "'. Switch the chart to 1D.")
+
+// --- Inputs ------------------------------------------------------------------
+maLen       = input.int(161,   "MA length (days)", minval = 2)
+overheatPct = input.float(5.0, "Overheated band (%)", minval = 0.0) / 100.0
+signalSym   = input.symbol("NASDAQ:QQQ", "Signal symbol (index proxy)")
+blockOnHot  = input.bool(true, "Block new entries when overheated")
+
+// --- Signal series (QQQ) — independent of the chart symbol -------------------
+// Compute the MA and the regime flags INSIDE the QQQ daily context and request
+// the finished values. Requesting the fully-computed signal (not just raw close)
+// is the multi-timeframe-safe pattern: it works whether the chart is daily or
+// intraday, and can't be distorted by resolution mismatch. lookahead_off keeps
+// us on confirmed daily closes only (no look-ahead bias).
+[qqqClose, qqqMa, aboveMa, overheated] = request.security(
+     signalSym, "D",
+     [close,
+      ta.sma(close, maLen),
+      close > ta.sma(close, maLen),
+      close > ta.sma(close, maLen) * (1.0 + overheatPct)],
+     lookahead = barmerge.lookahead_off)
+
+// --- Trading rules -----------------------------------------------------------
+// Enter TQQQ when QQQ is above the MA and not overheated; exit to cash below MA.
+enterLong = aboveMa and not (blockOnHot and overheated)
+exitLong  = not aboveMa
+
+if enterLong
+    strategy.entry("Long TQQQ", strategy.long)
+
+if exitLong
+    strategy.close("Long TQQQ", comment = "QQQ < MA")
+
+// --- Visuals -----------------------------------------------------------------
+// Regime background: red = QQQ below MA (cash), orange = overheated (ballast).
+// This works on ANY chart symbol and is the clearest at-a-glance signal.
+bgcolor(not aboveMa ? color.new(color.red,    88) : na, title = "Below MA (cash)")
+bgcolor(overheated  ? color.new(color.orange, 88) : na, title = "Overheated (ballast)")
+
+// ---------------------------------------------------------------------------
+// SHOWING QQQ PRICE + ITS 161-MA
+// ---------------------------------------------------------------------------
+// The honest constraint: this strategy trades TQQQ (~$50-140) but the signal is
+// QQQ (~$400-600). On a TQQQ chart, QQQ's REAL price/MA would plot far off the
+// top and be invisible. A single Pine script also can't open a second pane. So
+// there are two ways to see QQQ and its 161-MA at their TRUE values:
+//
+//   BEST — chart QQQ directly:  set `chartOnQqq = true` below AND change the
+//   chart symbol to NASDAQ:QQQ. Then the candles ARE QQQ, and the real 161-MA +
+//   overheated band plot exactly on price. The strategy still trades a 3x proxy
+//   for the tester. This is the recommended way to VISUALISE the signal.
+//
+//   ON A TQQQ CHART — the QQQ MA is rescaled by the live TQQQ/QQQ ratio so it
+//   tracks near the TQQQ candles (a visual aid; the signal uses the true MA).
+//
+// Either way the trade signal is identical — only the drawing differs.
+chartOnQqq = input.bool(false,
+     "I'm charting QQQ (plot REAL QQQ price + MA). Leave OFF for a TQQQ chart.")
+showMa     = input.bool(true, "Show QQQ 161-MA")
+showBand   = input.bool(true, "Show overheated (+5%) band")
+
+// True-value lines (use when the chart symbol IS QQQ).
+qqqBandTrue = qqqMa * (1.0 + overheatPct)
+
+// Rescaled lines (use on a TQQQ chart so they land near the candles).
+scaleFactor = close / qqqClose
+maRescaled  = qqqMa * scaleFactor
+bandRescaled = qqqBandTrue * scaleFactor
+
+// Pick which set to draw based on the chart the user is on.
+maPlot   = chartOnQqq ? qqqMa : maRescaled
+bandPlot = chartOnQqq ? qqqBandTrue : bandRescaled
+
+// Also plot QQQ's real close when charting QQQ (redundant with the candles, but
+// confirms request.security is returning live data — handy for sanity checks).
+// plot() titles must be CONST strings (known at compile time), so they can't be
+// a ternary. Titles are fixed; whether the value is real or rescaled depends on
+// the `chartOnQqq` toggle (see the maPlot/bandPlot definitions above).
+plot(chartOnQqq ? qqqClose : na, "QQQ close",
+     color = color.new(color.blue, 40), linewidth = 1)
+plot(showMa ? maPlot : na, "QQQ 161-MA",
+     color = color.new(color.orange, 0), linewidth = 2)
+plot(showBand ? bandPlot : na, "QQQ MA +5% band",
+     color = color.new(color.red, 30), linewidth = 1, style = plot.style_stepline)

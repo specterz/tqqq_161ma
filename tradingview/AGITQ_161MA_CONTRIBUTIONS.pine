@@ -1,0 +1,117 @@
+//@version=6
+// =============================================================================
+// AGITQ 161-day MA TQQQ strategy — CONTRIBUTIONS (DCA) backtest
+// -----------------------------------------------------------------------------
+// This is the dollar-cost-averaging variant: instead of one lump sum, you add a
+// fixed cash amount every N trading days, and it's invested following the same
+// 161-MA rules as the lump-sum script.
+//
+//   * QQQ ABOVE its 161-day SMA and NOT overheated -> new deposit buys TQQQ.
+//   * QQQ ABOVE the MA but overheated (> MA + 5%)   -> deposit stays as cash
+//                                                      (ballast; no new TQQQ).
+//   * QQQ BELOW the MA                              -> deposit stays as cash AND
+//                                                      any held TQQQ is sold.
+//   * On a fresh cross back above the MA (not hot)  -> parked cash buys TQQQ.
+//
+// IMPORTANT — how this differs from the lump-sum script and from the Python
+// `--mode contributions`:
+//   * Pine's Strategy Tester models ONE capital pool; it has no built-in
+//     "recurring deposit". We emulate deposits by tracking contributed cash in
+//     a variable and sizing TQQQ buys in DOLLARS (strategy.entry qty_type=cash).
+//   * The tester's "Net Profit %" is measured against `initial_capital`, which
+//     here we set equal to ONE contribution so early figures look sane. The
+//     honest performance read is the on-chart table (invested vs portfolio
+//     value vs approx. money-weighted return), NOT the tester's % column.
+//   * There is no true IRR in Pine; the table shows a simple annualized figure
+//     for orientation. For the exact IRR, use the Python backtest:
+//         python src/run.py --mode contributions --ma 161
+//
+// HOW TO USE
+//   1. TQQQ chart, Daily timeframe. Paste this in Pine Editor, Add to chart.
+//   2. Read the on-chart table (top-right) for invested / value / return.
+//   3. Tune contribution size, cadence, MA length, and overheated band via the
+//      strategy's gear icon.
+// =============================================================================
+
+strategy(
+     title                   = "AGITQ 161MA Contributions (DCA)",
+     overlay                 = true,
+     initial_capital         = 100,
+     default_qty_type        = strategy.cash,
+     default_qty_value       = 100,
+     commission_type         = strategy.commission.cash_per_order,
+     commission_value        = 1.0,
+     calc_on_every_tick      = false,
+     process_orders_on_close = true,
+     pyramiding              = 100000)
+
+// --- Inputs ------------------------------------------------------------------
+maLen        = input.int(161,   "MA length (days)", minval = 2)
+overheatPct  = input.float(5.0, "Overheated band (%)", minval = 0.0) / 100.0
+signalSym    = input.symbol("NASDAQ:QQQ", "Signal symbol (index proxy)")
+blockOnHot   = input.bool(true, "Block new buys when overheated")
+contribution = input.float(100.0, "Contribution ($ per deposit)", minval = 1.0)
+everyNDays   = input.int(21, "Deposit every N trading days", minval = 1)
+
+// --- Signal series (QQQ), confirmed daily close, no look-ahead ---------------
+qqqClose = request.security(signalSym, "D", close, lookahead = barmerge.lookahead_off)
+qqqMa    = ta.sma(qqqClose, maLen)
+
+aboveMa    = qqqClose > qqqMa
+overheated = qqqClose > qqqMa * (1.0 + overheatPct)
+
+// --- Accumulated (un-deployed) cash and total contributed --------------------
+var float parkedCash    = 0.0   // deposits waiting in cash (downtrend/overheated)
+var float totalInvested = 0.0   // sum of all contributions made
+var int   depositCount  = 0
+
+// Is today a deposit day? (bar_index is 0-based, matches Python i % N == 0.)
+isDepositDay = (bar_index % everyNDays) == 0
+
+if isDepositDay
+    parkedCash    := parkedCash + contribution
+    totalInvested := totalInvested + contribution
+    depositCount  := depositCount + 1
+
+// --- Trading rules -----------------------------------------------------------
+// Sell everything to cash when QQQ drops below the MA.
+if not aboveMa and strategy.position_size > 0
+    strategy.close("TQQQ", comment = "QQQ < MA")
+
+// Deploy parked cash into TQQQ when above the MA and not overheated.
+canBuy = aboveMa and not (blockOnHot and overheated)
+if canBuy and parkedCash > 0.0
+    strategy.entry("TQQQ", strategy.long, qty = parkedCash / close)
+    parkedCash := 0.0
+
+// --- On-chart results table (the honest performance read) --------------------
+// Portfolio value = market value of the TQQQ position + parked cash + any cash
+// the tester holds. strategy.equity already includes position value + cash.
+portValue = strategy.equity + parkedCash
+totalRet  = totalInvested > 0 ? (portValue / totalInvested - 1.0) * 100.0 : 0.0
+
+// Rough annualized return for orientation (NOT a true IRR).
+barsPerYear = 252.0
+yearsElapsed = bar_index / barsPerYear
+annApprox = (totalInvested > 0 and yearsElapsed > 0.5)
+     ? (math.pow(portValue / totalInvested, 1.0 / yearsElapsed) - 1.0) * 100.0
+     : na
+
+var table t = table.new(position.top_right, 2, 6, border_width = 1)
+if barstate.islast
+    table.cell(t, 0, 0, "AGITQ 161MA DCA", bgcolor = color.new(color.blue, 70), text_color = color.white)
+    table.cell(t, 1, 0, "", bgcolor = color.new(color.blue, 70))
+    table.cell(t, 0, 1, "Deposits")
+    table.cell(t, 1, 1, str.tostring(depositCount))
+    table.cell(t, 0, 2, "Invested")
+    table.cell(t, 1, 2, "$" + str.tostring(totalInvested, "#,###"))
+    table.cell(t, 0, 3, "Value")
+    table.cell(t, 1, 3, "$" + str.tostring(portValue, "#,###"))
+    table.cell(t, 0, 4, "Total return")
+    table.cell(t, 1, 4, str.tostring(totalRet, "#.#") + "%")
+    table.cell(t, 0, 5, "Approx ann.")
+    table.cell(t, 1, 5, na(annApprox) ? "n/a" : str.tostring(annApprox, "#.#") + "%")
+
+// --- Regime background -------------------------------------------------------
+bgcolor(not aboveMa ? color.new(color.red,    88) : na, title = "Below MA (cash)")
+bgcolor(overheated  ? color.new(color.orange, 88) : na, title = "Overheated (ballast)")
