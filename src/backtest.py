@@ -245,20 +245,24 @@ def xirr(dates: list[pd.Timestamp], amounts: list[float]) -> float:
             return float("inf")
         return float(np.sum(amt / base ** years))
 
-    # Bracket the root. NPV is monotonically decreasing in rate.
+    # Bracket the root between -99.99%/yr and +1000%/yr. NPV is monotonically
+    # decreasing in rate, so if it has the SAME sign at both ends it never
+    # crosses zero in the bracket -> unsolvable (e.g. all-loss series) -> NaN.
     lo, hi = -0.9999, 10.0
     f_lo, f_hi = npv(lo), npv(hi)
     if np.isnan(f_lo) or np.isnan(f_hi) or f_lo * f_hi > 0:
         return float("nan")
 
+    # Bisection: halve the bracket 200 times, keeping the half whose endpoints
+    # straddle the root (opposite signs). Converges to the rate where NPV == 0.
     for _ in range(200):
         mid = 0.5 * (lo + hi)
         f_mid = npv(mid)
-        if abs(f_mid) < 1e-6:
+        if abs(f_mid) < 1e-6:  # close enough to the root
             return mid
-        if f_lo * f_mid < 0:
+        if f_lo * f_mid < 0:   # root is in [lo, mid]
             hi, f_hi = mid, f_mid
-        else:
+        else:                  # root is in [mid, hi]
             lo, f_lo = mid, f_mid
     return 0.5 * (lo + hi)
 
@@ -337,7 +341,9 @@ def run_lump_sum(
     tqqq_ret = frame["tqqq"].pct_change().fillna(0.0)
     cash_factor = _daily_rf_factor(frame["rf"])
 
-    # Position for today's return = yesterday's signal (shift by 1).
+    # THE LOOK-AHEAD GUARD: today's position is YESTERDAY's signal (shift by 1).
+    # A signal computed on day t's close can only be acted on at t+1, so we never
+    # trade on information we couldn't have had. Day one has no prior -> cash.
     holding = frame["target"].shift(1).fillna("CASH")
 
     equity = np.empty(len(frame))
@@ -522,6 +528,8 @@ def run_contributions(
     else:
         spy_ret = (cash_factor - 1.0)  # risk-free daily return
 
+    # Shift the signal flags by one day, same look-ahead guard as lump-sum:
+    # act on day t's signal at t+1. Day one defaults to "below MA" (False).
     above = frame["above"].shift(1).fillna(False).values
     overheated = frame["overheated"].shift(1).fillna(False).values
 
@@ -560,8 +568,11 @@ def run_contributions(
             cash_bal += initial_lump_sum
 
     n = len(frame)
+    # Daily loop, four steps IN ORDER: (1) grow sleeves, (2) sell rule,
+    # (3) re-entry rule, (4) scheduled deposit. Order matters — growth before
+    # rotations, rotations before the deposit is measured/added.
     for i in range(n):
-        # Grow each sleeve by its daily return first.
+        # (1) Grow each sleeve by its daily return first.
         if i > 0:
             tqqq_bal *= (1.0 + tqqq_ret[i])
             cash_bal *= cash_factor[i]

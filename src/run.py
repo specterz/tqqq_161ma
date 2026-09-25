@@ -162,9 +162,13 @@ def main() -> None:
     # (so each MA is fully warmed up) then sliced to the common start.
     strat_results = []
     for ma in ma_windows:
+        # Compute on md_full (the UN-sliced series) so the MA sees all prior
+        # history and is genuinely warm at common_start. Computing on the
+        # already-sliced series would start each MA cold instead.
         signals_full = compute_signals(
             md_full.frame["qqq"], ma_window=ma, overheated_threshold=threshold
         )
+        # Now trim the warmed signal down to the shared comparison window.
         signals = Signals(signals_full.frame[signals_full.index >= common_start])
         if args.mode == "lump_sum":
             strat = run_lump_sum(

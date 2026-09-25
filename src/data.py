@@ -78,7 +78,10 @@ class MarketData:
 def _load_ndx(path: Path) -> pd.Series:
     """Load the Nasdaq-100 index close as an ascending float series."""
     raw = pd.read_csv(path)
-    # The investing.com export quotes the close under "Price".
+    # The investing.com export quotes the close under "Price" with thousands
+    # separators ("20,123.45"). Force to text -> strip commas -> parse float, in
+    # that order, so pandas doesn't misinfer the dtype on the comma-formatted
+    # strings.
     price = (
         raw["Price"].astype(str).str.replace(",", "", regex=False).astype(float)
     )
@@ -141,12 +144,23 @@ def build_market_data(
     # Index daily simple return.
     r_index = ndx.pct_change().fillna(0.0)
 
-    # Synthetic TQQQ daily return with financing + expense drag.
+    # Synthetic TQQQ daily return with financing + expense drag (the standard
+    # daily-reset leveraged-ETF path model).
+    #   - A 3x ETF holds 1x in cash and BORROWS the other (leverage-1)=2x. It
+    #     pays interest on that borrowed notional at the T-bill rate plus the
+    #     financing spread, divided by 252 to get the daily drag.
     daily_financing = (leverage - 1.0) * (rf + financing_spread) / TRADING_DAYS
+    #   - The 0.95% annual fund fee, also spread across the trading year.
     daily_expense = expense_ratio / TRADING_DAYS
+    #   - 3x the index's daily move, minus the two drags. Because this compounds
+    #     DAILY returns below, volatility drag emerges automatically: an up-then-
+    #     down index leaves 3x TQQQ below 3x the index's net move, just like the
+    #     real product. (Omits bid/ask + rebalancing slippage: second-order here.)
     r_tqqq = leverage * r_index - daily_financing - daily_expense
-    r_tqqq.iloc[0] = 0.0
+    r_tqqq.iloc[0] = 0.0  # no prior day on day one -> flat, not NaN
 
+    # Compound the daily returns into a price path, same $100 base as QQQ so the
+    # two curves are directly comparable on a chart.
     tqqq = (1.0 + r_tqqq).cumprod() * 100.0
     tqqq.name = "tqqq"
 

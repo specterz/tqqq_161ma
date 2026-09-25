@@ -118,6 +118,9 @@ def latest_expected_session(now_et: datetime | None = None) -> pd.Timestamp:
     else:  # fall back to UTC-5 approximation if tzdata is unavailable
         now_et = now_et or (datetime.now(timezone.utc) - timedelta(hours=5))
 
+    # True once we're past 16:00 ET + the publish lag, i.e. today's bar should
+    # now exist at the vendor. Built by adding the lag to today's 16:00 and
+    # comparing wall-clock times.
     close_t = time(MARKET_CLOSE_HHMM[0], MARKET_CLOSE_HHMM[1])
     after_close = now_et.time() >= (
         datetime.combine(now_et.date(), close_t) + timedelta(minutes=PUBLISH_LAG_MIN)
@@ -185,11 +188,16 @@ def download_ndx(
     latest_before = None if existing is None or existing.empty else existing["Date"].max()
 
     if existing is not None and not existing.empty:
-        # Prefer freshly fetched rows on overlapping dates, keep old history.
+        # Concatenate cache + fetch, then drop duplicate dates keeping the LAST
+        # occurrence. Because `fetched` is concatenated after `existing`, "last"
+        # is the freshly fetched row -> overlapping dates get refreshed while any
+        # bundled history that predates Yahoo's ^NDX coverage is preserved.
         combined = pd.concat([existing, fetched], ignore_index=True)
         combined = combined.drop_duplicates(subset="Date", keep="last")
         fetched = combined.sort_values("Date")
 
+    # Count only dates that weren't in the cache before, so the log reports the
+    # true number of *new* bars (not overlapping refreshes).
     new_rows = int(sum(1 for d in fetched["Date"] if d not in prev_dates))
     latest_after = fetched["Date"].max()
 

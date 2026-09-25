@@ -58,13 +58,22 @@ def compute_signals(
     The signal is computed on the close and, to avoid look-ahead, the backtest
     applies it starting the following trading day.
     """
+    # Trailing simple moving average. min_periods == window means the MA stays
+    # NaN until a full `ma_window` observations exist, so we never emit a signal
+    # off a half-formed average during the warmup period.
     ma = qqq.rolling(window=ma_window, min_periods=ma_window).mean()
+    # Core regime flag: is QQQ above its MA (uptrend -> hold TQQQ)?
     above = qqq > ma
     if overheated_threshold is None:
+        # Ballast rule disabled: nothing is ever "overheated", so deposits above
+        # the MA always buy TQQQ (no S&P sleeve).
         overheated = pd.Series(False, index=qqq.index)
     else:
+        # More than +5% above the MA. Implies `above`. Doesn't change the *held*
+        # target; only blocks new TQQQ deposits in contributions mode.
         overheated = qqq > ma * (1.0 + overheated_threshold)
 
+    # Held-capital target for lump-sum mode: TQQQ in an uptrend, else cash/SGOV.
     target = np.where(above, "TQQQ", "CASH")
 
     frame = pd.DataFrame(

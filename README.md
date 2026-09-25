@@ -173,20 +173,41 @@ strategy curve (plus the benchmarks) on one chart. The terminal table looks
 like:
 
 ```
-+----------------+----------+------------+-----------+--------+--------+--------+--------+------+
-| Strategy       | Invested |      Final |     Total |   CAGR | Sharpe |  MaxDD | Trades | Comm |
-+----------------+----------+------------+-----------+--------+--------+--------+--------+------+
-| TQQQ Hold      |  $10,000 | $2,153,532 | +21435.3% | +44.0% |   0.88 | -81.7% |      1 |   $0 |
-| 161MA Strategy |  $10,000 | $1,702,474 | +16924.7% | +41.7% |   0.95 | -55.0% |     85 |   $0 |
-| 200MA Strategy |  $10,000 | $1,284,556 | +12745.6% | +39.0% |   0.90 | -55.0% |     69 |   $0 |
-| 150MA Strategy |  $10,000 | $1,027,518 | +10175.2% | +36.9% |   0.88 | -59.6% |    103 |   $0 |
-| 250MA Strategy |  $10,000 |   $904,003 |  +8940.0% | +35.8% |   0.84 | -61.1% |     79 |   $0 |
-| 100MA Strategy |  $10,000 |   $241,935 |  +2319.4% | +24.1% |   0.68 | -58.1% |    157 |   $0 |
-| QQQ Hold       |  $10,000 |   $135,559 |  +1255.6% | +19.4% |   0.88 | -35.6% |      1 |   $0 |
-+----------------+----------+------------+-----------+--------+--------+--------+--------+------+
++----------------+----------+------------+-----------+--------+--------+--------+---------+-------+----------+------+
+| Strategy       | Invested |      Final |     Total |   CAGR | Sharpe |  MaxDD | Entries | Exits | Contribs | Comm |
++----------------+----------+------------+-----------+--------+--------+--------+---------+-------+----------+------+
+| TQQQ Hold      |  $10,000 | $2,095,519 | +20855.2% | +43.7% |   0.87 | -81.7% |       1 |     0 |        0 |   $0 |
+| 161MA Strategy |  $10,000 | $1,656,612 | +16466.1% | +41.4% |   0.94 | -55.0% |      43 |    42 |        0 |   $0 |
+| 200MA Strategy |  $10,000 | $1,249,952 | +12399.5% | +38.7% |   0.90 | -55.0% |      35 |    34 |        0 |   $0 |
+| 150MA Strategy |  $10,000 |   $999,838 |  +9898.4% | +36.7% |   0.87 | -59.6% |      52 |    51 |        0 |   $0 |
+| 250MA Strategy |  $10,000 |   $879,651 |  +8696.5% | +35.5% |   0.84 | -61.1% |      40 |    39 |        0 |   $0 |
+| 100MA Strategy |  $10,000 |   $235,418 |  +2254.2% | +23.9% |   0.67 | -58.1% |      79 |    78 |        0 |   $0 |
+| QQQ Hold       |  $10,000 |   $134,386 |  +1243.9% | +19.3% |   0.87 | -35.6% |       1 |     0 |        0 |   $0 |
++----------------+----------+------------+-----------+--------+--------+--------+---------+-------+----------+------+
 ```
 
 The header adapts to the metric (CAGR vs IRR) and the columns auto-size.
+
+**How to read the trade columns.** Trade activity is broken out into three
+separate counts rather than one lumped "trades" number, so you can see *what
+kind* of activity drove the result:
+
+- **Entries** — signal **buys**: QQQ crossed **above** its MA, so held capital
+  (or parked cash) rotated **into** TQQQ. Buy-and-hold benchmarks show `1` (the
+  single inception buy); DCA benchmarks show `0` (they never rotate on signal).
+- **Exits** — signal **sells**: QQQ crossed **below** its MA, so TQQQ was
+  rotated **out** to cash (SGOV). For the strategy, Entries and Exits track each
+  other closely — each round-trip is one of each (the trailing count can differ
+  by one when the series ends mid-position).
+- **Contribs** — scheduled **deposits** (contributions mode only). These are
+  cash inflows on the deposit schedule, **not** signal rotations, so they're
+  counted separately and never inflate the entry/exit trade count. Lump-sum
+  runs show `0` here.
+
+The older single `Trades` column was `Entries + Exits` combined; splitting it
+makes the round-trip count and the deposit cadence legible at a glance. The
+`.trades` property on a result still returns the combined `entries + exits`
+total if you need the old single number in code.
 
 **Sharpe ratio** is the annualized risk-adjusted return: mean daily excess
 return (over the T-bill) divided by daily volatility, times √252. Higher is
@@ -205,19 +226,20 @@ aligns to that MA's own warmup.)
 Example over 2011→2026 (calibrated spread), 100/150/161/200/250-day windows,
 printed in the actual sorted order (best CAGR first):
 
-| Rank | Series | Total return | CAGR | Max drawdown | Trades |
-|------|--------|-------------:|-----:|-------------:|-------:|
-| 1 | TQQQ Hold      |   +20,927%  | 43.8% | -81.7% |   1  |
-| 2 | **161MA**      |   +16,523%  | **41.5%** | -55.0% |  85  |
-| 3 | 200MA          |   +12,442%  | 38.8% | -55.0% |  69  |
-| 4 | 150MA          |    +9,933%  | 36.7% | -59.6% | 103  |
-| 5 | 250MA          |    +8,727%  | 35.5% | -61.1% |  79  |
-| 6 | 100MA          |    +2,262%  | 23.9% | -58.1% | 157  |
-| 7 | QQQ Hold       |    +1,245%  | 19.3% | -35.6% |   1  |
+| Rank | Series | Total return | CAGR | Max drawdown | Entries | Exits |
+|------|--------|-------------:|-----:|-------------:|--------:|------:|
+| 1 | TQQQ Hold      |   +20,855%  | 43.7% | -81.7% |   1  |  0  |
+| 2 | **161MA**      |   +16,466%  | **41.4%** | -55.0% |  43  | 42  |
+| 3 | 200MA          |   +12,400%  | 38.7% | -55.0% |  35  | 34  |
+| 4 | 150MA          |    +9,898%  | 36.7% | -59.6% |  52  | 51  |
+| 5 | 250MA          |    +8,697%  | 35.5% | -61.1% |  40  | 39  |
+| 6 | 100MA          |    +2,254%  | 23.9% | -58.1% |  79  | 78  |
+| 7 | QQQ Hold       |    +1,244%  | 19.3% | -35.6% |   1  |  0  |
 
 Among the strategies **161 wins** on return *and* ties for the lowest drawdown —
 an empirical echo of the Reddit post's claim that 161 is a sweet spot. The
-100-day is too twitchy (157 trades, worst return); the 250-day lags entries.
+100-day is too twitchy (79 entries / 78 exits — the most round-trips, worst
+return); the 250-day lags entries.
 
 Options: `--ma` (one or more MA windows, default 161), `--threshold` (overheated %, default
 0.05), `--no-overheating` (disable the +5% ballast rule entirely — deposits
@@ -241,11 +263,11 @@ Lump-sum, 2011-01 → 2026-09 (synthetic data):
 
 Using the calibrated −0.40% spread:
 
-| Strategy       | Total return | CAGR   | Max drawdown | Trades |
-|----------------|-------------:|-------:|-------------:|-------:|
-| 161MA Strategy |    +13,207%  | 38.3%  |    -55.0%    |   97   |
-| TQQQ Hold      |    +26,414%  | 44.8%  |    -81.7%    |    1   |
-| QQQ Hold       |     +1,391%  | 19.6%  |    -35.6%    |    1   |
+| Strategy       | Total return | CAGR   | Max drawdown | Entries | Exits |
+|----------------|-------------:|-------:|-------------:|--------:|------:|
+| 161MA Strategy |    +13,162%  | 38.2%  |    -55.0%    |   49    |  48   |
+| TQQQ Hold      |    +26,323%  | 44.7%  |    -81.7%    |    1    |   0   |
+| QQQ Hold       |     +1,390%  | 19.6%  |    -35.6%    |    1    |   0   |
 
 The strategy's headline is **risk management**: it gives up some of TQQQ's raw
 upside but roughly halves the worst drawdown (-55% vs -82%) by sitting in cash
