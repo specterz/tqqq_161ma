@@ -1,0 +1,18 @@
+{
+  "name": "AGITQ 161-MA TQQQ Backtest",
+  "short_name": "161MA Backtest",
+  "description": "Backtest the AGITQ 161-day MA TQQQ strategy in your browser.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b0f17",
+  "theme_color": "#0b0f17",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='36' fill='%230b0f17'/%3E%3Ctext x='96' y='120' font-size='72' font-family='sans-serif' font-weight='700' fill='%234c8dff' text-anchor='middle'%3E161%3C/text%3E%3C/svg%3E",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

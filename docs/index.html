@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0f17" />
+  <title>AGITQ 161-MA TQQQ Backtest</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <!-- Pyodide: runs the real Python engine in the browser (single source of truth). -->
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"></script>
+  <!-- Chart.js for the equity + signal charts. -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>AGITQ 161-MA <span>TQQQ Backtest</span></h1>
+    <p class="tagline">Runs the real Python engine in your browser — same numbers as the CLI.</p>
+  </header>
+
+  <main>
+    <!-- ============ CONTROLS ============ -->
+    <section class="card controls" id="controls">
+      <div class="row">
+        <label>Mode
+          <select id="mode">
+            <option value="lump_sum" selected>Lump sum</option>
+            <option value="contributions">Contributions (DCA)</option>
+          </select>
+        </label>
+        <label>MA window(s)
+          <input id="ma" type="text" inputmode="numeric" value="161"
+                 placeholder="e.g. 161 or 100 161 200" />
+        </label>
+      </div>
+
+      <div class="row">
+        <label>Leverage
+          <select id="leverage" multiple size="3" title="Ctrl/Cmd-click for multiple">
+            <option value="3" selected>3x — TQQQ</option>
+            <option value="2">2x — QLD</option>
+            <option value="1">1x — QQQ</option>
+          </select>
+        </label>
+        <label class="check">
+          <input id="overheatingEnabled" type="checkbox" />
+          Overheating rule
+        </label>
+        <label id="overheatBandWrap" class="hidden">Band %
+          <input id="overheatBand" type="number" min="0" max="50" step="0.5" value="5" />
+        </label>
+      </div>
+
+      <div class="row">
+        <label>Start
+          <input id="start" type="date" value="2011-01-01" />
+        </label>
+        <label>End
+          <input id="end" type="date" />
+        </label>
+      </div>
+
+      <!-- Lump-sum only -->
+      <div class="row mode-lump">
+        <label>Initial $
+          <input id="initial" type="number" min="0" step="100" value="10000" />
+        </label>
+      </div>
+
+      <!-- Contributions only -->
+      <div class="row mode-dca hidden">
+        <label>Contribution $
+          <input id="contribution" type="number" min="0" step="10" value="100" />
+        </label>
+        <label>Every N days
+          <input id="every" type="number" min="1" step="1" value="21" />
+        </label>
+        <label>Initial lump $
+          <input id="initialLumpSum" type="number" min="0" step="100" value="0" />
+        </label>
+      </div>
+
+      <details class="advanced">
+        <summary>Advanced</summary>
+        <div class="row">
+          <label>Commission $
+            <input id="commission" type="number" min="0" step="0.5" value="0" />
+          </label>
+          <label>Financing spread %
+            <input id="financingSpread" type="number" step="0.1" value="-0.40" />
+          </label>
+          <label>Expense ratio %
+            <input id="expenseRatio" type="number" min="0" step="0.05" value="0.95" />
+          </label>
+        </div>
+        <label class="check">
+          <input id="wantMonthly" type="checkbox" checked />
+          Show monthly returns table
+        </label>
+      </details>
+
+      <button id="runBtn" class="run" disabled>Loading engine…</button>
+      <p id="status" class="status"></p>
+    </section>
+
+    <!-- ============ RESULTS ============ -->
+    <section class="card results hidden" id="resultsCard">
+      <h2>Results</h2>
+      <p id="metaLine" class="meta"></p>
+      <div class="table-scroll">
+        <table id="resultsTable">
+          <thead>
+            <tr>
+              <th>Strategy</th><th>Invested</th><th>Final</th><th>Total</th>
+              <th id="annHead">CAGR</th><th>Sharpe</th><th>MaxDD</th>
+              <th>Entries</th><th>Exits</th><th>Contribs</th><th>Comm</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card chart-card hidden" id="equityCard">
+      <h2>Equity curve <span class="sub">(log scale)</span></h2>
+      <div class="chart-wrap"><canvas id="equityChart"></canvas></div>
+    </section>
+
+    <section class="card chart-card hidden" id="signalCard">
+      <h2>QQQ vs its moving average</h2>
+      <div class="chart-wrap"><canvas id="signalChart"></canvas></div>
+    </section>
+
+    <section class="card monthly hidden" id="monthlyCard">
+      <h2>Monthly returns <span class="sub" id="monthlyLabel"></span></h2>
+      <div class="table-scroll">
+        <table id="monthlyTable"></table>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Research tool, not investment advice. Synthetic leveraged-ETF series;
+       pre-2010 figures are stress tests, not a real track record. Leveraged
+       ETFs can lose most of their value.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

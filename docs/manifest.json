@@ -1,0 +1,13 @@
+{
+  "py": [
+    "data.py",
+    "strategy.py",
+    "backtest.py",
+    "web_api.py"
+  ],
+  "data": [
+    "NDX.csv",
+    "tbill_dgs3mo.csv",
+    "SPX.csv"
+  ]
+}
