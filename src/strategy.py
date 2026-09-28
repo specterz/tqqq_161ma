@@ -5,9 +5,10 @@ Rules (as described in the r/TQQQ "ultimate TQQQ strategy" post):
 * Signal asset is QQQ (the Nasdaq-100 proxy), not TQQQ.
 * When QQQ closes **above** its 161-day simple moving average -> hold TQQQ.
 * When QQQ closes **below** its 161-day MA -> exit to treasury (SGOV/cash).
-* Overheated / ballast rule: when QQQ is more than ``+5%`` above the 161-day MA,
-  do **not** add new money to TQQQ. New contributions go into an S&P 500 sleeve
-  instead. (This only affects deposits; existing TQQQ keeps riding.)
+* Overheated / ballast rule (opt-in; OFF by default via ``--overheating X``):
+  when QQQ is more than ``+X%`` above the 161-day MA, do **not** add new money to
+  TQQQ. New contributions go into a VOO / S&P 500 sleeve instead. (This only
+  affects deposits; existing TQQQ keeps riding.)
 * Checked once per trading day; a signal acts on the next close.
 
 This module produces a per-day target allocation. The backtest engine consumes

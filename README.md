@@ -11,9 +11,11 @@ The signal is driven by **QQQ** (the Nasdaq-100), not by TQQQ itself:
 
 1. **Buy TQQQ** when QQQ closes **above** its **161-day** simple moving average.
 2. **Sell to treasury (SGOV / cash)** when QQQ closes **below** the 161-day MA.
-3. **Overheated / ballast rule:** when QQQ is more than **+5%** above its
-   161-day MA, do not add new money to TQQQ. New contributions go into an
-   **S&P 500** sleeve instead. This ballast cushions drawdowns.
+3. **Overheated / ballast rule (optional, OFF by default):** enable it with
+   `--overheating X`. Then new contributions buy TQQQ **only while** QQQ is above
+   the MA **and** below MA+X%. Above MA+X% (overheated), the deposit is parked in
+   a **VOO / S&P 500** sleeve instead. This ballast cushions drawdowns. Without
+   the flag, any deposit above the MA buys TQQQ.
 4. Check once per day and follow the rules — no discretion.
 
 ### Why 161 days?
@@ -41,6 +43,10 @@ built synthetically (see `src/data.py`):
 
 - **Risk-free / SGOV sleeve** — grows at the daily 3-month T-bill rate
   (`data/tbill_dgs3mo.csv`, FRED DGS3MO).
+- **VOO / S&P 500 ballast sleeve** — the overheated rule parks deposits here.
+  It grows at **real S&P 500 returns** from `data/SPX.csv` (Yahoo `^GSPC`,
+  auto-updated like NDX), normalised to a $100 base. VOO tracks the S&P 500, so
+  this is a faithful proxy for the ballast.
 
 > These are **synthetic** series for research, not real TQQQ/SGOV prices. Results
 > will differ from live products, especially before TQQQ existed (2010).
@@ -153,8 +159,11 @@ pip install -r requirements.txt
 # Lump-sum backtest from 2011 (approx TQQQ era)
 python src/run.py --mode lump_sum --start 2011-01-01
 
-# Dollar-cost-averaging with the overheated ballast rule
+# Dollar-cost-averaging (overheating rule off by default)
 python src/run.py --mode contributions --contribution 100 --every 21 --start 2020-01-01
+
+# Same, but enable the +5% overheated rule (deposits above MA+5% go to VOO/S&P)
+python src/run.py --mode contributions --contribution 100 --every 21 --overheating 5
 
 # DCA plus a one-off lump sum invested on day one
 python src/run.py --mode contributions --contribution 100 --every 7 --initial-lump-sum 10000 --start 2004-01-01
@@ -241,13 +250,20 @@ an empirical echo of the Reddit post's claim that 161 is a sweet spot. The
 100-day is too twitchy (79 entries / 78 exits — the most round-trips, worst
 return); the 250-day lags entries.
 
-Options: `--ma` (one or more MA windows, default 161), `--threshold` (overheated %, default
-0.05), `--no-overheating` (disable the +5% ballast rule entirely — deposits
-above the MA always buy TQQQ), `--start` / `--end`, `--initial` (lump-sum mode), `--contribution`,
+Options: `--ma` (one or more MA windows, default 161), `--overheating X`
+(enable the ballast rule with a +X% band — OFF by default; when on, deposits
+above MA+X% go into the VOO/S&P sleeve), `--start` / `--end`, `--initial` (lump-sum mode), `--contribution`,
 `--initial-lump-sum` (a day-one deposit in contributions mode, on top of the
 recurring contributions), `--every` (trading days between deposits),
-`--commission`, `--no-plot`, `--format` (chart format: `svg` default / `png` /
-`pdf`), `--dpi` (raster resolution, only used for `--format png`).
+`--commission`, `--leverage` (one or more ETF factors: 3 = TQQQ default, 2 = QLD,
+1 = QQQ; pass several to compare, e.g. `--leverage 2 3` — note the financing
+spread is calibrated for 3x), `--no-plot`, `--format` (chart format: `svg`
+default / `png` / `pdf`), `--dpi` (raster resolution, only used for `--format png`).
+
+Both `--ma` and `--leverage` accept lists and combine as a full cross-product:
+`--ma 161 200 --leverage 2 3` produces four strategy rows (QLD/TQQQ × 161/200),
+each leverage's Hold/DCA benchmark, and a shared QQQ benchmark. (The browser app
+runs one leverage at a time — use the CLI for multi-leverage sweeps.)
 
 Charts are written to `results/` as **SVG by default** — vector graphics that
 stay razor-sharp at any zoom level (open in a browser or image viewer and zoom

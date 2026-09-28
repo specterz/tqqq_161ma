@@ -57,24 +57,38 @@ def parse_args() -> argparse.Namespace:
         default=[MA_WINDOW],
         help="one or more MA windows to test, e.g. --ma 100 150 161 200 250",
     )
-    p.add_argument("--threshold", type=float, default=OVERHEATED_THRESHOLD)
     p.add_argument(
-        "--no-overheating",
-        action="store_true",
-        help="disable the +5%% overheated/ballast rule (contributions above the "
-             "MA always buy TQQQ; no S&P ballast sleeve)",
+        "--overheating",
+        type=float,
+        default=None,
+        metavar="X",
+        help="enable the overheated rule with a +X%% band: contribute (buy TQQQ) "
+             "only while price is above the MA AND below MA+X%%; above MA+X%% the "
+             "deposit goes into the VOO/S&P sleeve instead. Omitted = rule OFF "
+             "(default): any deposit above the MA buys TQQQ.",
+    )
+    p.add_argument(
+        "--leverage",
+        type=float,
+        nargs="+",
+        default=None,
+        metavar="L",
+        help="one or more leveraged-ETF factors to model: 3 = TQQQ (default), "
+             "2 = QLD, 1 = QQQ. Pass several to compare, e.g. --leverage 2 3. "
+             "Note the financing spread is calibrated for 3x TQQQ; other factors "
+             "are directionally modelled, not calibrated.",
     )
     p.add_argument(
         "--financing-spread",
         type=float,
         default=None,
-        help="TQQQ financing spread over T-bill (default: calibrated -0.40%%)",
+        help="financing spread over T-bill (default: calibrated -0.40%% for 3x)",
     )
     p.add_argument(
         "--expense-ratio",
         type=float,
         default=None,
-        help="TQQQ annual expense ratio (default: 0.95%%)",
+        help="leveraged-ETF annual expense ratio (default: 0.95%%)",
     )
     p.add_argument(
         "--mom",
@@ -113,39 +127,68 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    md_kwargs = {"auto_update": not args.no_update, "max_age_days": args.max_age_days}
-    if args.financing_spread is not None:
-        md_kwargs["financing_spread"] = args.financing_spread
-    if args.expense_ratio is not None:
-        md_kwargs["expense_ratio"] = args.expense_ratio
-    md_full = build_market_data(**md_kwargs).slice(args.start, args.end)
-
     ma_windows = sorted(set(args.ma))
+    leverages = args.leverage if args.leverage is not None else [3.0]
+    # De-dupe while preserving the given order (so labels read left-to-right).
+    seen = set()
+    leverages = [x for x in leverages if not (x in seen or seen.add(x))]
+    multi_lev = len(leverages) > 1
 
-    # Align every series (all strategies AND benchmarks) to a common start: the
-    # first date on which the LONGEST MA tested is defined. Signals are computed
-    # on the full data, then everything is sliced to this common date so the
-    # comparison window is identical no matter which MAs are swept. Without this,
-    # a longer MA drops more warmup rows and benchmarks would silently start on
-    # different dates for different sweeps.
+    # Overheated rule is OFF by default; --overheating X (percent) turns it on.
+    threshold = None if args.overheating is None else args.overheating / 100.0
+
+    def etf_of(lev: float) -> str:
+        return {1.0: "QQQ", 2.0: "QLD", 3.0: "TQQQ"}.get(lev, f"{lev:g}x")
+
+    # Base kwargs shared across every leverage build (data source + tunables).
+    base_kwargs = {"auto_update": not args.no_update, "max_age_days": args.max_age_days}
+    if args.financing_spread is not None:
+        base_kwargs["financing_spread"] = args.financing_spread
+    if args.expense_ratio is not None:
+        base_kwargs["expense_ratio"] = args.expense_ratio
+
+    # Build the market data for each leverage ONCE and cache it. The data files
+    # are refreshed only on the FIRST build (honouring --no-update/--max-age);
+    # subsequent builds pass auto_update=False so we never re-check or re-fetch
+    # the same NDX/SPX data — only the leveraged 'tqqq' column is recomputed.
+    md_full_by_lev = {}
+    for i, lev in enumerate(leverages):
+        kw = dict(base_kwargs)
+        if i > 0:
+            kw["auto_update"] = False  # data already fresh from the first build
+        md_full_by_lev[lev] = build_market_data(leverage=lev, **kw).slice(
+            args.start, args.end
+        )
+    md_full0 = md_full_by_lev[leverages[0]]  # QQQ/signals source (leverage-independent)
     warmup = max(ma_windows)
-    if len(md_full.frame) <= warmup:
-        raise SystemExit(f"Not enough data ({len(md_full.frame)} days) for a "
+    if len(md_full0.frame) <= warmup:
+        raise SystemExit(f"Not enough data ({len(md_full0.frame)} days) for a "
                          f"{warmup}-day MA warmup.")
-    common_start = md_full.index[warmup - 1]
-    md = md_full.slice(common_start.strftime("%Y-%m-%d"))
+    common_start = md_full0.index[warmup - 1]
 
-    # None disables the overheated/ballast rule entirely.
-    threshold = None if args.no_overheating else args.threshold
+    # Pre-compute the warmed signal per MA once (depends only on QQQ).
+    signals_by_ma = {}
+    for ma in ma_windows:
+        sf = compute_signals(
+            md_full0.frame["qqq"], ma_window=ma, overheated_threshold=threshold
+        )
+        signals_by_ma[ma] = Signals(sf.frame[sf.frame.index >= common_start])
+    bench_sf = compute_signals(
+        md_full0.frame["qqq"], ma_window=warmup, overheated_threshold=threshold
+    )
+    bench_signals = Signals(bench_sf.frame[bench_sf.frame.index >= common_start])
+
+    md0 = md_full0.slice(common_start.strftime("%Y-%m-%d"))
 
     print(
-        f"Data: {md.index.min().date()} -> {md.index.max().date()} "
-        f"({len(md.frame)} trading days, aligned to {warmup}-day warmup)"
+        f"Data: {md0.index.min().date()} -> {md0.index.max().date()} "
+        f"({len(md0.frame)} trading days, aligned to {warmup}-day warmup)"
     )
+    print("Leverage: " + ", ".join(f"{x:g}x ({etf_of(x)})" for x in leverages))
     print(
         f"MA windows: {', '.join(str(m) for m in ma_windows)}  "
-        + ("overheated: DISABLED" if threshold is None
-           else f"overheated: +{threshold * 100:.0f}%")
+        + ("overheated: OFF" if threshold is None
+           else f"overheated: contribute only below MA+{threshold * 100:.1f}%")
     )
     if args.mode == "contributions":
         print(
@@ -158,54 +201,57 @@ def main() -> None:
         )
     print()
 
-    # One strategy result per MA window. Signals are computed on the full series
-    # (so each MA is fully warmed up) then sliced to the common start.
+    # Prefix strategy labels with the ETF only when comparing multiple leverages,
+    # so a single-leverage run keeps its familiar "161MA Strategy" label.
+    def strat_label(lev: float, ma: int) -> str:
+        return f"{etf_of(lev)} {ma}MA" if multi_lev else f"{ma}MA Strategy"
+
     strat_results = []
-    for ma in ma_windows:
-        # Compute on md_full (the UN-sliced series) so the MA sees all prior
-        # history and is genuinely warm at common_start. Computing on the
-        # already-sliced series would start each MA cold instead.
-        signals_full = compute_signals(
-            md_full.frame["qqq"], ma_window=ma, overheated_threshold=threshold
-        )
-        # Now trim the warmed signal down to the shared comparison window.
-        signals = Signals(signals_full.frame[signals_full.index >= common_start])
+    benchmarks = []
+    md = md0  # for the chart panel (leverage-independent QQQ/MA)
+    for li, lev in enumerate(leverages):
+        # Reuse the cached full series for this leverage (built + refreshed once
+        # above); just slice it to the shared comparison window.
+        md_lev = md_full_by_lev[lev].slice(common_start.strftime("%Y-%m-%d"))
+        etf = etf_of(lev)
+
+        for ma in ma_windows:
+            signals = signals_by_ma[ma]
+            if args.mode == "lump_sum":
+                strat = run_lump_sum(
+                    md_lev, signals, initial=args.initial,
+                    commission=args.commission, label=strat_label(lev, ma),
+                )
+            else:
+                strat = run_contributions(
+                    md_lev, signals, contribution=args.contribution,
+                    every_n_days=args.every, commission=args.commission or 2.0,
+                    initial_lump_sum=args.initial_lump_sum, label=strat_label(lev, ma),
+                )
+            strat_results.append(strat)
+
+        # One leveraged-hold benchmark per leverage.
         if args.mode == "lump_sum":
-            strat = run_lump_sum(
-                md, signals, initial=args.initial,
-                commission=args.commission, label=f"{ma}MA Strategy",
+            benchmarks.append(
+                run_hold(md_lev, bench_signals, "tqqq", initial=args.initial,
+                         label=f"{etf} Hold")
             )
         else:
-            strat = run_contributions(
-                md, signals, contribution=args.contribution,
-                every_n_days=args.every, commission=args.commission or 2.0,
-                initial_lump_sum=args.initial_lump_sum, label=f"{ma}MA Strategy",
+            benchmarks.append(
+                run_hold_dca(md_lev, bench_signals, "tqqq", contribution=args.contribution,
+                             every_n_days=args.every, initial_lump_sum=args.initial_lump_sum,
+                             label=f"{etf} DCA")
             )
-        strat_results.append(strat)
 
-    # Benchmarks are MA-independent; build once over the common-start window.
-    bench_signals = compute_signals(
-        md_full.frame["qqq"], ma_window=warmup, overheated_threshold=threshold
-    )
-    bench_signals = Signals(bench_signals.frame[bench_signals.index >= common_start])
+    # QQQ (1x) benchmark once, at the end (leverage-independent).
     if args.mode == "lump_sum":
-        benchmarks = [
-            run_hold(md, bench_signals, "tqqq", initial=args.initial, label="TQQQ Hold"),
-            run_hold(md, bench_signals, "qqq", initial=args.initial, label="QQQ Hold"),
-        ]
+        benchmarks.append(run_hold(md0, bench_signals, "qqq", initial=args.initial, label="QQQ Hold"))
     else:
-        benchmarks = [
-            run_hold_dca(
-                md, bench_signals, "tqqq", contribution=args.contribution,
-                every_n_days=args.every, initial_lump_sum=args.initial_lump_sum,
-                label="TQQQ DCA",
-            ),
-            run_hold_dca(
-                md, bench_signals, "qqq", contribution=args.contribution,
-                every_n_days=args.every, initial_lump_sum=args.initial_lump_sum,
-                label="QQQ DCA",
-            ),
-        ]
+        benchmarks.append(
+            run_hold_dca(md0, bench_signals, "qqq", contribution=args.contribution,
+                         every_n_days=args.every, initial_lump_sum=args.initial_lump_sum,
+                         label="QQQ DCA")
+        )
 
     results = strat_results + benchmarks
     # Sort best-to-worst by annualized return (CAGR for lump-sum, IRR for
@@ -220,7 +266,7 @@ def main() -> None:
     # Best strategy by annualized return (used for --mom and the summary line).
     best = max(strat_results, key=lambda r: r.annualized)
     if len(strat_results) > 1:
-        print(f"\nBest MA by {best.annualized_kind}: {best.label} "
+        print(f"\nBest strategy by {best.annualized_kind}: {best.label} "
               f"({best.annualized * 100:+.1f}%)")
 
     if args.mom:
@@ -249,7 +295,7 @@ def main() -> None:
 
     # Signal panel: QQQ vs each MA window. MAs are computed on the full series
     # (so they're warmed up) then sliced to the displayed window.
-    qqq_full = md_full.frame["qqq"]
+    qqq_full = md_full0.frame["qqq"]
     qqq = md.frame["qqq"]
     ax[1].plot(qqq.index, qqq.values, label="QQQ", color="#1f77b4", linewidth=1.0)
     for ma in ma_windows:

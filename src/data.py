@@ -60,7 +60,7 @@ TRADING_DAYS = 252
 class MarketData:
     """Aligned daily series indexed by date (ascending)."""
 
-    frame: pd.DataFrame  # columns: qqq, tqqq, rf (daily risk-free rate)
+    frame: pd.DataFrame  # columns: qqq, tqqq, rf (daily risk-free), spx (VOO proxy)
 
     @property
     def index(self) -> pd.DatetimeIndex:
@@ -104,6 +104,18 @@ def _load_riskfree(path: Path) -> pd.Series:
     return series
 
 
+def _load_spx(path: Path) -> pd.Series:
+    """Load the S&P 500 index close (same CSV shape as NDX) as a float series.
+
+    This is the underlying VOO tracks; used for the overheated "ballast" sleeve.
+    """
+    raw = pd.read_csv(path)
+    price = raw["Price"].astype(str).str.replace(",", "", regex=False).astype(float)
+    dates = pd.to_datetime(raw["Date"])
+    series = pd.Series(price.values, index=dates, name="spx").sort_index()
+    return series[~series.index.duplicated(keep="last")]
+
+
 def build_market_data(
     ndx_path: Path | str | None = None,
     tbill_path: Path | str | None = None,
@@ -125,14 +137,20 @@ def build_market_data(
     """
     ndx_path = Path(ndx_path) if ndx_path else DATA_DIR / "NDX.csv"
     tbill_path = Path(tbill_path) if tbill_path else DATA_DIR / "tbill_dgs3mo.csv"
+    spx_path = DATA_DIR / "SPX.csv"
 
     # Refresh the index data on demand (no-op if fresh or auto_update disabled).
-    from fetch_data import ensure_ndx_csv
+    from fetch_data import ensure_ndx_csv, ensure_spx_csv
 
-    ensure_ndx_csv(ndx_path, max_age_days=max_age_days, auto_update=auto_update)
+    # When auto_update is off this is just a cached-file re-read (e.g. secondary
+    # per-leverage builds); stay quiet so the log isn't repeated.
+    _verbose = auto_update
+    ensure_ndx_csv(ndx_path, max_age_days=max_age_days, auto_update=auto_update, verbose=_verbose)
+    ensure_spx_csv(spx_path, max_age_days=max_age_days, auto_update=auto_update, verbose=_verbose)
 
     ndx = _load_ndx(ndx_path)
     rf = _load_riskfree(tbill_path)
+    spx = _load_spx(spx_path)
 
     # Align risk-free onto the trading calendar defined by the index.
     rf = rf.reindex(ndx.index).ffill().bfill()
@@ -140,6 +158,13 @@ def build_market_data(
     # QQQ proxy: normalise the index to a $100 start so levels are ETF-like.
     qqq = ndx / ndx.iloc[0] * 100.0
     qqq.name = "qqq"
+
+    # VOO proxy: the S&P 500 index normalised to $100, aligned to the NDX
+    # calendar (forward-filled across any missing dates). This is the ballast
+    # sleeve overheated deposits flow into.
+    spx = spx.reindex(ndx.index).ffill().bfill()
+    voo = spx / spx.iloc[0] * 100.0
+    voo.name = "spx"
 
     # Index daily simple return.
     r_index = ndx.pct_change().fillna(0.0)
@@ -170,6 +195,7 @@ def build_market_data(
             "qqq": qqq,
             "tqqq": tqqq,
             "rf": rf,  # annualised decimal rate
+            "spx": voo,  # S&P 500 (VOO) proxy, $100 base
         }
     )
     frame = frame.dropna()

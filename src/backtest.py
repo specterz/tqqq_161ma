@@ -520,13 +520,16 @@ def run_contributions(
     tqqq_ret = frame["tqqq"].pct_change().fillna(0.0).values
     cash_factor = _daily_rf_factor(frame["rf"]).values
 
-    # S&P 500 ballast sleeve. When no external SPY series is supplied we use the
-    # cash/risk-free growth as a conservative stand-in so the sleeve is defined.
+    # VOO / S&P 500 ballast sleeve. Overheated deposits flow here. Prefer the
+    # real S&P series (the 'spx' column on MarketData); fall back to an explicit
+    # spy_proxy, and only as a last resort to risk-free growth.
     if spy_proxy is not None:
         spy = spy_proxy.reindex(frame.index).ffill()
         spy_ret = spy.pct_change().fillna(0.0).values
+    elif "spx" in frame.columns:
+        spy_ret = frame["spx"].pct_change().fillna(0.0).values
     else:
-        spy_ret = (cash_factor - 1.0)  # risk-free daily return
+        spy_ret = (cash_factor - 1.0)  # risk-free daily return (last resort)
 
     # Shift the signal flags by one day, same look-ahead guard as lump-sum:
     # act on day t's signal at t+1. Day one defaults to "below MA" (False).

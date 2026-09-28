@@ -46,6 +46,9 @@ PUBLISH_LAG_MIN = 30
 # itself goes back to 1985 but Yahoo's ^NDX history is shorter, so we keep the
 # bundled NDX.csv as the long history and only *extend/refresh* the recent tail.
 YAHOO_SYMBOL = "%5ENDX"
+# S&P 500 index (URL-encoded ^GSPC) — the underlying VOO tracks. Used for the
+# overheated "ballast" sleeve so it reflects real S&P 500 returns.
+SPX_SYMBOL = "%5EGSPC"
 YAHOO_CHART = (
     "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
     "?period1={p1}&period2={p2}&interval=1d"
@@ -212,8 +215,12 @@ def ensure_ndx_csv(
     symbol: str = YAHOO_SYMBOL,
     auto_update: bool = True,
     verbose: bool = True,
+    label: str = "NDX",
 ) -> Path:
     """Ensure ``path`` exists and is fresh, downloading only if needed.
+
+    Generic over the index (``label`` is only used in log messages) so the same
+    logic serves both the Nasdaq-100 (``^NDX``) and the S&P 500 (``^GSPC``).
 
     * Missing file -> download (fatal if the download also fails).
     * Stale file -> try to refresh; fall back to the cached copy if the network
@@ -235,7 +242,7 @@ def ensure_ndx_csv(
             )
         existing = _read_existing(path)
         latest = existing["Date"].max().date() if existing is not None and not existing.empty else "?"
-        log(f"auto-update off; using cached data (latest {latest}).")
+        log(f"{label}: auto-update off; using cached data (latest {latest}).")
         return path
 
     missing = not path.exists()
@@ -244,30 +251,43 @@ def ensure_ndx_csv(
     if not missing and not stale:
         existing = _read_existing(path)
         latest = existing["Date"].max().date() if existing is not None and not existing.empty else "?"
-        log(f"data already up to date (latest {latest}); no fetch needed.")
+        log(f"{label}: data already up to date (latest {latest}); no fetch needed.")
         return path
 
     reason = "missing" if missing else "stale"
-    log(f"NDX data {reason}; fetching {symbol}...")
+    log(f"{label} data {reason}; fetching {symbol}...")
     try:
         _df, new_rows, latest_before, latest_after = download_ndx(path, symbol=symbol)
         before = latest_before.date() if latest_before is not None else "none"
         after = latest_after.date()
         if new_rows > 0:
-            log(
-                f"updated: +{new_rows} new row(s), latest {before} -> {after}."
-            )
+            log(f"{label}: updated +{new_rows} new row(s), latest {before} -> {after}.")
         else:
-            log(f"fetch succeeded but no new rows (latest still {after}).")
+            log(f"{label}: fetch succeeded but no new rows (latest still {after}).")
     except (urllib.error.URLError, KeyError, ValueError, TimeoutError) as exc:
         if missing:
             raise RuntimeError(
-                f"Could not download NDX data and no cached file exists: {exc}"
+                f"Could not download {label} data and no cached file exists: {exc}"
             ) from exc
         existing = _read_existing(path)
         latest = existing["Date"].max().date() if existing is not None and not existing.empty else "?"
-        log(f"update failed ({exc}); using cached data (latest {latest}).")
+        log(f"{label}: update failed ({exc}); using cached data (latest {latest}).")
     return path
+
+
+def ensure_spx_csv(
+    path: Path | str,
+    max_age_days: float | None = None,
+    auto_update: bool = True,
+    verbose: bool = True,
+) -> Path:
+    """Ensure the S&P 500 (``^GSPC``) CSV exists and is fresh. Thin wrapper over
+    :func:`ensure_ndx_csv` with the S&P symbol and an "SPX" log label.
+    """
+    return ensure_ndx_csv(
+        path, max_age_days=max_age_days, symbol=SPX_SYMBOL,
+        auto_update=auto_update, verbose=verbose, label="SPX",
+    )
 
 
 if __name__ == "__main__":
