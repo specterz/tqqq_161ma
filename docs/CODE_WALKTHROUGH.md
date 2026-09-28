@@ -349,9 +349,8 @@ Pure text-formatting. They compute each column's width from the widest cell
 (header, body, or footer), left-align the label column, right-align the numbers,
 and draw the `+---+` box. `format_results_table` picks the annualized header
 from the set of result kinds — one kind → `"CAGR"`/`"IRR"`, mixed → `"Ann."`.
-`format_monthly_table` adds a YTD column (compounded, not summed) and Sum/Avg
-footer rows, with an explicit note that the Sum row is arithmetic (a compounded
-total would be the YTD figure).
+`format_monthly_table` adds a YTD column (compounded, not summed) and an Avg
+footer row (the mean return per calendar month).
 
 ### `_cagr(equity)`
 

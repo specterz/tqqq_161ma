@@ -109,15 +109,12 @@ def _monthly_table(r: Any) -> dict[str, Any]:
         rows.append({"year": y, "months": cells,
                      "ytd": round(ytd * 100, 1) if ytd is not None else None})
 
-    sum_row = [round(col_sums[i] * 100, 1) for i in range(12)]
     avg_row = [round(col_sums[i] / col_counts[i] * 100, 1) if col_counts[i] else None
                for i in range(12)]
     return {
         "label": r.label,
         "rows": rows,
-        "sum": sum_row,
         "avg": avg_row,
-        "sumYtd": round(ytd_sum * 100, 1),
         "avgYtd": round(ytd_sum / ytd_count * 100, 1) if ytd_count else None,
     }
 

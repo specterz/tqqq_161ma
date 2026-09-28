@@ -224,9 +224,6 @@ function renderMonthly(res) {
       row.months.map((v) => `<td class="${cls(v)}">${cell(v)}</td>`).join("") +
       `<td class="${cls(row.ytd)}">${cell(row.ytd)}</td></tr>`;
   }
-  html += `<tr><td class="foot">Sum</td>` +
-    m.sum.map((v) => `<td class="foot ${cls(v)}">${cell(v)}</td>`).join("") +
-    `<td class="foot ${cls(m.sumYtd)}">${cell(m.sumYtd)}</td></tr>`;
   html += `<tr><td class="foot">Avg</td>` +
     m.avg.map((v) => `<td class="foot ${cls(v)}">${cell(v)}</td>`).join("") +
     `<td class="foot ${cls(m.avgYtd)}">${cell(m.avgYtd)}</td></tr>`;

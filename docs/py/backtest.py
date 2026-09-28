@@ -136,7 +136,7 @@ _MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
 
 def format_monthly_table(result: "BacktestResult") -> str:
     """Year x month return grid (percent) with a YTD column, boxed with column
-    separators to match the results table. Sum/Avg footer rows included.
+    separators to match the results table. An Avg footer row is included.
     """
     m = result.monthly_returns()
     if m.empty:
@@ -148,7 +148,7 @@ def format_monthly_table(result: "BacktestResult") -> str:
     def pct(v: float) -> str:
         return "" if v != v else f"{v * 100:+.1f}%"  # v!=v catches NaN
 
-    # Per-column accumulators for the footer.
+    # Per-column accumulators for the Avg footer (mean per calendar month).
     col_sums = [0.0] * 12
     col_counts = [0] * 12
     ytd_sum = 0.0
@@ -174,13 +174,12 @@ def format_monthly_table(result: "BacktestResult") -> str:
         row.append(pct(ytd))
         body_rows.append(row)
 
-    sum_row = ["Sum"] + [pct(col_sums[mo]) for mo in range(12)] + [pct(ytd_sum)]
     avg_row = ["Avg"] + [
         pct(col_sums[mo] / col_counts[mo]) if col_counts[mo] else "" for mo in range(12)
     ] + [pct(ytd_sum / ytd_count) if ytd_count else ""]
 
     # Column widths from the widest cell in each column (header, body, footer).
-    all_rows = [headers] + body_rows + [sum_row, avg_row]
+    all_rows = [headers] + body_rows + [avg_row]
     ncol = len(headers)
     widths = [0] * ncol
     for row in all_rows:
@@ -196,11 +195,10 @@ def format_monthly_table(result: "BacktestResult") -> str:
     lines = [f"Monthly returns — {result.label}", sep, fmt_row(headers), sep]
     lines += [fmt_row(r) for r in body_rows]
     lines.append(sep)
-    lines.append(fmt_row(sum_row))
     lines.append(fmt_row(avg_row))
     lines.append(sep)
-    lines.append("Note: monthly returns compound; the Sum row is an arithmetic "
-                 "total (not a compounded return). Avg = mean per calendar month.")
+    lines.append("Note: Avg = mean return per calendar month (the YTD column is "
+                 "the compounded year-to-date return).")
     return "\n".join(lines)
 
 
