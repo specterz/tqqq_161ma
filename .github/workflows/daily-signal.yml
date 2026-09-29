@@ -1,6 +1,6 @@
-name: Daily 161-MA signal email
+name: Daily 161-MA signal
 
-# Runs after the US market close on weekdays and emails the day's signal.
+# Runs after the US market close on weekdays and posts the day's signal to Discord.
 # 21:30 UTC ≈ 4:30pm ET (winter) / 5:30pm ET (summer) — comfortably post-close.
 on:
   schedule:
@@ -27,21 +27,14 @@ jobs:
       - name: Refresh NDX data
         run: python src/fetch_data.py --force
 
-      # Compute today's signal and email it. --no-update because the step above
-      # already fetched. Credentials come from repo Secrets
-      # (Settings -> Secrets and variables -> Actions):
-      #   SMTP_USER, SMTP_PASS  (e.g. a Gmail address + app password)
-      #   MAIL_TO               (recipient)
-      # Optional: SMTP_HOST, SMTP_PORT, MAIL_FROM.
-      - name: Send daily signal
+      # Compute today's signal and post it to Discord. --no-update because the
+      # step above already fetched. The webhook URL is a repo Secret:
+      #   Settings -> Secrets and variables -> Actions -> DISCORD_WEBHOOK
+      - name: Post daily signal to Discord
         env:
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
-          python src/daily_signal.py --to "${{ secrets.MAIL_TO }}" --contribution 100 --no-update
+          python src/daily_signal.py --discord --contribution 100 --no-update
 
       # Commit the refreshed NDX.csv back to the repo so it stays daily-fresh.
       # Only commits if the file actually changed (no-op on weekends/holidays).

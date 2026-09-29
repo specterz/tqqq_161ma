@@ -15,8 +15,9 @@ Cross days ("crossed BELOW today — SELL") are called out explicitly.
 ## Try it locally first
 
 ```bash
-python src/daily_signal.py --dry-run            # prints, no email
+python src/daily_signal.py --dry-run            # prints, no send
 python src/daily_signal.py --dry-run --contribution 50
+python src/daily_signal.py --discord "https://discord.com/api/webhooks/..."  # test post
 ```
 
 Example output:
@@ -30,28 +31,30 @@ Distance from MA:+9.57%   <-- headline
 Action:          ABOVE MA — keep DCA: buy $50 TQQQ
 ```
 
-## Automate the daily email (GitHub Actions, free)
+## Automate the daily alert (GitHub Actions + Discord, free)
 
 The workflow `.github/workflows/daily-signal.yml` runs every weekday ~21:30 UTC
-(after the US close) and emails you. To enable it:
+(after the US close) and posts the signal to a Discord channel. To enable it:
 
-1. **Make the repo public** (or ensure you have Actions minutes) and push.
-2. Add repo **Secrets**: Settings → Secrets and variables → Actions → New
-   repository secret. Add:
-   - `SMTP_USER` — your sending email (e.g. a Gmail address)
-   - `SMTP_PASS` — an **app password**, not your normal password (see below)
-   - `MAIL_TO`   — where the alert goes (can be the same address)
-   - *(optional)* `SMTP_HOST`, `SMTP_PORT`, `MAIL_FROM`
-3. Enable Actions if prompted (Actions tab).
-4. Test it now: Actions tab → "Daily 161-MA signal email" → **Run workflow**.
-5. Check your inbox. After that it runs automatically each weekday.
+1. **Create a Discord webhook:** in your Discord server, Server Settings →
+   Integrations → Webhooks → New Webhook → pick a channel → **Copy Webhook URL**.
+2. **Make the repo public** (or ensure you have Actions minutes) and push.
+3. Add one repo **Secret**: Settings → Secrets and variables → Actions → New
+   repository secret → name `DISCORD_WEBHOOK`, value = the webhook URL.
+4. Enable Actions if prompted (Actions tab).
+5. Test it now: Actions tab → "Daily 161-MA signal" → **Run workflow**.
+6. Check your Discord channel — a green (above MA) or red (below MA) card with
+   the % distance and action appears. After that it runs automatically each
+   weekday, pushing a phone notification.
 
-### Gmail app password
+That's the whole setup — **one secret, no email server, no app password.**
 
-Normal Gmail passwords won't work over SMTP. Turn on 2-Step Verification, then
-create an **App Password** (Google Account → Security → App passwords) and use
-that 16-character value as `SMTP_PASS`. Any SMTP provider works; adjust
-`SMTP_HOST`/`SMTP_PORT` accordingly.
+### Prefer email instead (or as well)?
+
+`daily_signal.py` also supports SMTP email via `--to you@example.com` with
+`SMTP_USER` / `SMTP_PASS` (a Gmail **App Password**, created under Google Account
+→ Security → App passwords) and optional `SMTP_HOST` / `SMTP_PORT` / `MAIL_FROM`.
+You can pass both `--discord` and `--to` to send to both.
 
 ## Notes
 

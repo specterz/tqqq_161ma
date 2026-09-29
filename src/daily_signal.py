@@ -9,11 +9,17 @@ The email headline is the % distance from the MA (positive = above). It reuses
 signal the backtest uses), so the alert can never drift from the strategy.
 
 Usage:
-  python src/daily_signal.py --dry-run                 # print only, no email
-  python src/daily_signal.py --to you@example.com      # compute + email (SMTP)
-Env vars for SMTP email (e.g. Gmail app password):
-  SMTP_HOST (default smtp.gmail.com), SMTP_PORT (default 587),
-  SMTP_USER, SMTP_PASS, MAIL_FROM (default = SMTP_USER)
+  python src/daily_signal.py --dry-run                    # print only, no send
+  python src/daily_signal.py --discord https://discord... # post to Discord
+  python src/daily_signal.py --discord                    # use DISCORD_WEBHOOK env
+  python src/daily_signal.py --to you@example.com         # email via SMTP
+  # (combine --discord and --to to send both)
+
+Delivery options:
+  * Discord webhook (simplest): create one in Discord under Server Settings ->
+    Integrations -> Webhooks. Pass the URL via --discord or DISCORD_WEBHOOK.
+  * SMTP email (e.g. Gmail app password): SMTP_HOST (default smtp.gmail.com),
+    SMTP_PORT (default 587), SMTP_USER, SMTP_PASS, MAIL_FROM (default SMTP_USER).
 """
 
 from __future__ import annotations
@@ -132,13 +138,57 @@ def send_email(subject: str, body: str, to_addr: str) -> None:
         s.send_message(msg)
 
 
+def post_discord(sig: "Signal", webhook_url: str) -> None:
+    """POST the signal to a Discord incoming webhook (stdlib only).
+
+    Uses a compact rich "embed": green when above the MA, red when below, with
+    the % distance as the headline field. Create the webhook in Discord under
+    Server Settings -> Integrations -> Webhooks -> New Webhook -> Copy URL.
+    """
+    import json
+    import urllib.request
+
+    color = 0x3FB950 if sig.above else 0xF85149  # green above, red below
+    payload = {
+        "username": "161MA Signal",
+        "embeds": [
+            {
+                "title": sig.subject(),
+                "color": color,
+                "fields": [
+                    {"name": "Distance from MA",
+                     "value": f"**{sig.pct_from_ma:+.2f}%**", "inline": True},
+                    {"name": "QQQ close",
+                     "value": f"{sig.qqq:,.2f}", "inline": True},
+                    {"name": f"{sig.ma_window}-day MA",
+                     "value": f"{sig.ma:,.2f}", "inline": True},
+                    {"name": "Action", "value": sig.action, "inline": False},
+                ],
+                "footer": {"text": "Informational only — not a trade order."},
+            }
+        ],
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        webhook_url, data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        if resp.status not in (200, 204):
+            raise RuntimeError(f"Discord webhook returned HTTP {resp.status}")
+
+
 def main() -> None:
-    p = argparse.ArgumentParser(description="Daily QQQ 161-MA signal + email")
-    p.add_argument("--to", help="recipient email address")
+    p = argparse.ArgumentParser(description="Daily QQQ 161-MA signal alert")
+    p.add_argument("--to", help="email recipient (SMTP; needs SMTP_* env vars)")
+    p.add_argument("--discord", nargs="?", const="", default=None,
+                   help="Discord webhook URL (or omit the value to read the "
+                        "DISCORD_WEBHOOK env var)")
     p.add_argument("--contribution", type=float, default=100.0,
                    help="DCA amount to suggest when above the MA (default 100)")
     p.add_argument("--ma", type=int, default=MA_WINDOW)
-    p.add_argument("--dry-run", action="store_true", help="print only, no email")
+    p.add_argument("--dry-run", action="store_true", help="print only, no send")
     p.add_argument("--no-update", action="store_true",
                    help="use cached data, do not fetch")
     args = p.parse_args()
@@ -152,11 +202,27 @@ def main() -> None:
     print("-" * len(sig.subject()))
     print(sig.body())
 
-    if not args.dry_run:
-        if not args.to:
-            raise SystemExit("Provide --to <email> (or use --dry-run).")
+    if args.dry_run:
+        return
+
+    sent = False
+    # Discord: --discord <url>, or --discord (bare) to use DISCORD_WEBHOOK env.
+    if args.discord is not None:
+        url = args.discord or os.environ.get("DISCORD_WEBHOOK", "")
+        if not url:
+            raise SystemExit("Discord selected but no URL (pass it or set "
+                             "DISCORD_WEBHOOK).")
+        post_discord(sig, url)
+        print("\n[posted to Discord]")
+        sent = True
+
+    if args.to:
         send_email(sig.subject(), sig.body(), args.to)
-        print(f"\n[sent to {args.to}]")
+        print(f"\n[emailed to {args.to}]")
+        sent = True
+
+    if not sent:
+        raise SystemExit("Nothing sent. Use --discord and/or --to, or --dry-run.")
 
 
 if __name__ == "__main__":
