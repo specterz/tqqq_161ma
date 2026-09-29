@@ -149,6 +149,10 @@ def post_discord(sig: "Signal", webhook_url: str) -> None:
     import urllib.error
     import urllib.request
 
+    # Normalise the legacy domain: discordapp.com issues a cross-host redirect
+    # that urllib won't follow on a POST (surfaces as 403). discord.com is direct.
+    webhook_url = webhook_url.replace("discordapp.com", "discord.com")
+
     color = 0x3FB950 if sig.above else 0xF85149  # green above, red below
     payload = {
         "username": "161MA Signal",
