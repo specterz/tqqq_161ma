@@ -41,6 +41,8 @@ jobs:
 
       # Commit the refreshed NDX.csv back to the repo so it stays daily-fresh.
       # Only commits if the file actually changed (no-op on weekends/holidays).
+      # Push is retried with rebase in case main advanced since checkout (e.g. a
+      # manual push or an overlapping run) — otherwise the push races and fails.
       - name: Commit refreshed data
         run: |
           git config user.name "github-actions[bot]"
@@ -48,7 +50,16 @@ jobs:
           git add data/NDX.csv
           if git diff --cached --quiet; then
             echo "No data change; nothing to commit."
-          else
-            git commit -m "Auto-update NDX data [skip ci]"
-            git push
+            exit 0
           fi
+          git commit -m "Auto-update NDX data [skip ci]"
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              echo "Pushed on attempt $attempt."
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt); rebasing on latest main..."
+            git pull --rebase --autostash origin main || true
+          done
+          echo "Failed to push after retries." >&2
+          exit 1
