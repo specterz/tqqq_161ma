@@ -37,9 +37,9 @@ from strategy import MA_WINDOW, compute_signals
 @dataclass
 class Signal:
     date: str
-    qqq: float
+    qqq: float              # NDX close (the signal source; QQQ tracks it 1:1)
     ma: float
-    pct_from_ma: float      # (qqq/ma - 1) * 100
+    pct_from_ma: float      # (ndx/ma - 1) * 100 — same % as QQQ vs its MA
     above: bool
     crossed_today: bool     # regime differs from the prior trading day
     ma_window: int
@@ -63,16 +63,18 @@ class Signal:
     def body(self) -> str:
         lines = [
             f"Date:            {self.date}",
-            f"QQQ close:       {self.qqq:,.2f}",
+            f"NDX close:       {self.qqq:,.2f}",
             f"{self.ma_window}-day MA:      {self.ma:,.2f}",
             f"Distance from MA:{self.pct_from_ma:+.2f}%   <-- headline",
             "",
-            f"Signal:          QQQ is {'ABOVE' if self.above else 'BELOW'} its "
+            f"Signal:          NDX is {'ABOVE' if self.above else 'BELOW'} its "
             f"{self.ma_window}-day MA"
             + ("  (regime CHANGED today)" if self.crossed_today else ""),
             f"Action:          {self.action}",
             "",
-            "Rule: above the MA -> DCA into TQQQ; below -> sell TQQQ to cash.",
+            "Signal source: Nasdaq-100 index (NDX); QQQ tracks it, so the % "
+            "distance is the same. Rule: above the MA -> DCA into TQQQ; "
+            "below -> sell TQQQ to cash.",
             "Informational only — not a trade order or financial advice.",
         ]
         return "\n".join(lines)
@@ -163,7 +165,7 @@ def post_discord(sig: "Signal", webhook_url: str) -> None:
                 "fields": [
                     {"name": "Distance from MA",
                      "value": f"**{sig.pct_from_ma:+.2f}%**", "inline": True},
-                    {"name": "QQQ close",
+                    {"name": "NDX close",
                      "value": f"{sig.qqq:,.2f}", "inline": True},
                     {"name": f"{sig.ma_window}-day MA",
                      "value": f"{sig.ma:,.2f}", "inline": True},
