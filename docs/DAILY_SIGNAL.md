@@ -58,7 +58,12 @@ that 16-character value as `SMTP_PASS`. Any SMTP provider works; adjust
 - **Timing:** the alert reflects *today's close*, so it lands after market
   close — you act the next session. That matches how the strategy is defined
   (act on the confirmed daily close).
-- **Data source:** the job refreshes the Nasdaq-100 index via Yahoo. If a fetch
-  fails the run errors (visible in the Actions tab) rather than emailing a stale
-  signal.
+- **Data source:** the job refreshes the Nasdaq-100 index via Yahoo, emails the
+  signal computed on that fresh data, then **commits the updated `data/NDX.csv`
+  back to the repo** so it stays daily-fresh (also keeping the website snapshot
+  current). The commit is skipped on days with no new bar (weekends/holidays),
+  and carries `[skip ci]` so it never triggers other workflows.
+- **Permissions:** the workflow needs `contents: write` (already set in the
+  YAML). If the push is rejected, check Settings → Actions → General →
+  "Workflow permissions" is set to **Read and write permissions**.
 - **Not advice:** this is an informational alert. You place any actual trades.

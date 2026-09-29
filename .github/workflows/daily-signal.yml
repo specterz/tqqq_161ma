@@ -7,6 +7,9 @@ on:
     - cron: "30 21 * * 1-5"
   workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
 
+permissions:
+  contents: write   # allow the commit-back step to push the refreshed CSV
+
 jobs:
   signal:
     runs-on: ubuntu-latest
@@ -19,7 +22,13 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      # Compute today's signal and email it. Credentials come from repo Secrets
+      # Refresh the Nasdaq-100 data first so both the email AND the commit-back
+      # use the same freshly downloaded CSV.
+      - name: Refresh NDX data
+        run: python src/fetch_data.py --force
+
+      # Compute today's signal and email it. --no-update because the step above
+      # already fetched. Credentials come from repo Secrets
       # (Settings -> Secrets and variables -> Actions):
       #   SMTP_USER, SMTP_PASS  (e.g. a Gmail address + app password)
       #   MAIL_TO               (recipient)
@@ -32,4 +41,18 @@ jobs:
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           MAIL_FROM: ${{ secrets.MAIL_FROM }}
         run: |
-          python src/daily_signal.py --to "${{ secrets.MAIL_TO }}" --contribution 100
+          python src/daily_signal.py --to "${{ secrets.MAIL_TO }}" --contribution 100 --no-update
+
+      # Commit the refreshed NDX.csv back to the repo so it stays daily-fresh.
+      # Only commits if the file actually changed (no-op on weekends/holidays).
+      - name: Commit refreshed data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/NDX.csv
+          if git diff --cached --quiet; then
+            echo "No data change; nothing to commit."
+          else
+            git commit -m "Auto-update NDX data [skip ci]"
+            git push
+          fi
