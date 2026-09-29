@@ -174,9 +174,11 @@ def post_discord(sig: "Signal", webhook_url: str) -> None:
         webhook_url, data=data,
         headers={
             "Content-Type": "application/json",
-            # Discord requires a User-Agent and rejects urllib's default with a
-            # 403; send a normal one. (Their docs mandate a UA on API requests.)
-            "User-Agent": "tqqq-161ma-signal/1.0 (+https://github.com/specterz/tqqq_161ma)",
+            # Discord (via Cloudflare) rejects urllib's default UA with 403.
+            # A browser-like User-Agent + Accept reliably passes the edge check.
+            "User-Agent": "Mozilla/5.0 (compatible; tqqq-161ma-signal/1.0; "
+                          "+https://github.com/specterz/tqqq_161ma)",
+            "Accept": "application/json",
         },
         method="POST",
     )
