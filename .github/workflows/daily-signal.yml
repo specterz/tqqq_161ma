@@ -1,10 +1,13 @@
 name: Daily 161-MA signal
 
 # Runs after the US market close on weekdays and posts the day's signal to Discord.
-# 21:30 UTC ≈ 4:30pm ET (winter) / 5:30pm ET (summer) — comfortably post-close.
+# GitHub cron is UTC-only (no DST). 21:15 UTC = 4:15pm ET in winter (EST) and
+# 5:15pm ET in summer (EDT) — always safely after the 4:00pm close either way.
+# (Weekdays only: weekend runs would just re-report Friday's unchanged signal.)
+# Note: GitHub may start scheduled runs several minutes late; timing is approximate.
 on:
   schedule:
-    - cron: "30 21 * * 1-5"
+    - cron: "15 21 * * 1-5"
   workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
 
 permissions:
