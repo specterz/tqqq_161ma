@@ -1,0 +1,35 @@
+name: Daily 161-MA signal email
+
+# Runs after the US market close on weekdays and emails the day's signal.
+# 21:30 UTC ≈ 4:30pm ET (winter) / 5:30pm ET (summer) — comfortably post-close.
+on:
+  schedule:
+    - cron: "30 21 * * 1-5"
+  workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
+
+jobs:
+  signal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      # Compute today's signal and email it. Credentials come from repo Secrets
+      # (Settings -> Secrets and variables -> Actions):
+      #   SMTP_USER, SMTP_PASS  (e.g. a Gmail address + app password)
+      #   MAIL_TO               (recipient)
+      # Optional: SMTP_HOST, SMTP_PORT, MAIL_FROM.
+      - name: Send daily signal
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+        run: |
+          python src/daily_signal.py --to "${{ secrets.MAIL_TO }}" --contribution 100
