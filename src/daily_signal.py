@@ -146,6 +146,7 @@ def post_discord(sig: "Signal", webhook_url: str) -> None:
     Server Settings -> Integrations -> Webhooks -> New Webhook -> Copy URL.
     """
     import json
+    import urllib.error
     import urllib.request
 
     color = 0x3FB950 if sig.above else 0xF85149  # green above, red below
@@ -171,12 +172,22 @@ def post_discord(sig: "Signal", webhook_url: str) -> None:
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         webhook_url, data=data,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            # Discord requires a User-Agent and rejects urllib's default with a
+            # 403; send a normal one. (Their docs mandate a UA on API requests.)
+            "User-Agent": "tqqq-161ma-signal/1.0 (+https://github.com/specterz/tqqq_161ma)",
+        },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        if resp.status not in (200, 204):
-            raise RuntimeError(f"Discord webhook returned HTTP {resp.status}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            if resp.status not in (200, 204):
+                raise RuntimeError(f"Discord webhook returned HTTP {resp.status}")
+    except urllib.error.HTTPError as exc:
+        # Surface Discord's error body (e.g. bad URL, rate limit) for debugging.
+        detail = exc.read().decode("utf-8", "replace")[:300]
+        raise RuntimeError(f"Discord webhook HTTP {exc.code}: {detail}") from exc
 
 
 def main() -> None:
