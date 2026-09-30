@@ -58,18 +58,25 @@ _USER_AGENT = "Mozilla/5.0 (compatible; tqqq-backtest/1.0)"
 
 def _fetch_chart_json(symbol: str, start_ts: int, end_ts: int) -> dict:
     url = YAHOO_CHART.format(symbol=symbol, p1=start_ts, p2=end_ts)
+    # Yahoo rejects the default urllib UA; a browser-like User-Agent avoids 403s.
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=30) as resp:  # 30s cap so a hung host can't wedge a run
         return json.loads(resp.read().decode("utf-8"))
 
 
 def _chart_to_frame(payload: dict) -> pd.DataFrame:
     """Yahoo chart JSON -> DataFrame with a 'Date' and 'Price' (close) column."""
+    # Yahoo nests everything under chart.result[0]; parallel arrays of unix
+    # timestamps and OHLC quotes that must be zipped back together by index.
     result = payload["chart"]["result"][0]
     ts = result["timestamp"]
     closes = result["indicators"]["quote"][0]["close"]
+    # Unix seconds -> tz-aware UTC -> drop tz -> normalize to midnight, so dates
+    # match the plain date-only keys used everywhere else (no intraday times).
     dates = pd.to_datetime(ts, unit="s", utc=True).tz_convert(None).normalize()
+    # Yahoo emits null closes for halted/incomplete sessions; dropna removes them.
     df = pd.DataFrame({"Date": dates, "Price": closes}).dropna()
+    # Keep one row per date (last wins) and sort oldest-first for downstream code.
     df = df.drop_duplicates(subset="Date", keep="last").sort_values("Date")
     return df
 
@@ -80,17 +87,21 @@ def _write_ndx_csv(df: pd.DataFrame, path: Path) -> None:
     ``_load_ndx`` only reads the ``Date`` and ``Price`` columns and strips commas,
     so a plain two-column CSV (newest-first, to match the original) is fine.
     """
+    # Write newest-first and comma-grouped ("20,123.45") to mirror the original
+    # investing.com export exactly, so the file looks hand-identical and _load_ndx
+    # (which strips commas and re-sorts) round-trips it unchanged.
     out = df.sort_values("Date", ascending=False).copy()
     out["Date"] = out["Date"].dt.strftime("%Y-%m-%d")
     out["Price"] = out["Price"].map(lambda x: f"{x:,.2f}")
-    out.to_csv(path, index=False, columns=["Date", "Price"], quoting=1)  # quote all
+    out.to_csv(path, index=False, columns=["Date", "Price"], quoting=1)  # quoting=1 = quote all fields
 
 
 def _read_existing(path: Path) -> pd.DataFrame | None:
     if not path.exists():
-        return None
+        return None                       # no cache yet -> caller treats as "must download"
     try:
         raw = pd.read_csv(path)
+        # Same comma-stripped float parse as data._load_ndx (kept in sync).
         price = raw["Price"].astype(str).str.replace(",", "", regex=False).astype(float)
         dates = pd.to_datetime(raw["Date"])
         return (
@@ -100,6 +111,8 @@ def _read_existing(path: Path) -> pd.DataFrame | None:
             .sort_values("Date")
         )
     except Exception:
+        # A corrupt/half-written CSV shouldn't crash the run: treat it as "no
+        # cache" so the caller re-downloads a clean copy.
         return None
 
 
@@ -154,17 +167,18 @@ def _is_stale(path: Path, max_age_days: float | None) -> bool:
     """
     existing = _read_existing(path)
     if existing is None or existing.empty:
-        return True
+        return True                       # nothing cached (or unreadable) -> refresh
 
-    last = existing["Date"].max().normalize()
+    last = existing["Date"].max().normalize()  # newest bar we currently hold
 
     if max_age_days is None:
+        # Close-aware: stale only if a session has closed that we don't have yet.
         return last < latest_expected_session()
 
     if max_age_days <= 0:
-        return True
+        return True                       # 0 (or negative) means "always refetch"
     age = (pd.Timestamp.now().normalize() - last).days
-    return age > max_age_days
+    return age > max_age_days             # simple calendar-day staleness
 
 
 def download_ndx(
@@ -181,12 +195,15 @@ def download_ndx(
     ``new_row_count`` is how many *new dates* the fetch added versus the cache.
     """
     path = Path(path)
+    # Yahoo's chart API takes a [period1, period2] window in unix seconds.
     start_ts = int(pd.Timestamp(start).timestamp())
-    end_ts = int(datetime.now(timezone.utc).timestamp())
+    end_ts = int(datetime.now(timezone.utc).timestamp())  # "now" = up to the latest bar
 
     fetched = _chart_to_frame(_fetch_chart_json(symbol, start_ts, end_ts))
 
     existing = _read_existing(path) if merge_existing else None
+    # Snapshot the pre-merge date set + newest date so we can report exactly how
+    # many genuinely new bars arrived (vs. overlapping refreshes).
     prev_dates = set() if existing is None else set(existing["Date"])
     latest_before = None if existing is None or existing.empty else existing["Date"].max()
 

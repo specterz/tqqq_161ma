@@ -22,18 +22,22 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-MA_WINDOW = 161
-OVERHEATED_THRESHOLD = 0.05  # +5% above the MA
+# The strategy's two tunable constants (both overridable per call / via the CLI):
+MA_WINDOW = 161              # the moving-average length the whole strategy hinges on
+OVERHEATED_THRESHOLD = 0.05  # +5% above the MA counts as "overheated" (opt-in rule)
 
 
 @dataclass
 class Signals:
     """Daily signal frame produced by :func:`compute_signals`."""
 
-    frame: pd.DataFrame  # columns: ma, above, overheated, target
+    # One DataFrame carrying the computed per-day signal columns:
+    #   qqq (input price), ma, above (bool), overheated (bool), target (str).
+    frame: pd.DataFrame
 
     @property
     def index(self) -> pd.DatetimeIndex:
+        # Shorthand for the frame's date index (matches MarketData.index).
         return self.frame.index
 
 
@@ -74,18 +78,21 @@ def compute_signals(
         # target; only blocks new TQQQ deposits in contributions mode.
         overheated = qqq > ma * (1.0 + overheated_threshold)
 
-    # Held-capital target for lump-sum mode: TQQQ in an uptrend, else cash/SGOV.
+    # Held-capital target for lump-sum mode: "TQQQ" on up days, else "CASH".
+    # np.where picks element-wise from the two options based on the `above` mask.
     target = np.where(above, "TQQQ", "CASH")
 
+    # Bundle input + all derived columns into one aligned frame.
     frame = pd.DataFrame(
         {
-            "qqq": qqq,
-            "ma": ma,
-            "above": above,
-            "overheated": overheated,
-            "target": target,
+            "qqq": qqq,                # the input price series (echoed for convenience)
+            "ma": ma,                  # trailing moving average
+            "above": above,           # QQQ > MA?  (drives buy/sell)
+            "overheated": overheated,  # QQQ > MA*(1+X%)?  (routes deposits to VOO)
+            "target": target,          # "TQQQ" | "CASH" held-capital target
         }
     )
-    # Only meaningful once the MA warms up.
+    # Drop the warmup rows where ma is still NaN (first ma_window-1 days), so the
+    # returned frame only contains days with a valid, fully-formed signal.
     frame = frame.dropna(subset=["ma"])
     return Signals(frame)

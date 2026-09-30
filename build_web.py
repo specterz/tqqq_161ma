@@ -28,12 +28,16 @@ def main() -> None:
     (DOCS / "py").mkdir(parents=True, exist_ok=True)
     (DOCS / "data").mkdir(parents=True, exist_ok=True)
 
+    # copy2 preserves timestamps/metadata so the copied engine is byte-identical
+    # to src/ — the whole point is that the browser runs the SAME code as the CLI.
     for f in PY_FILES:
         shutil.copy2(ROOT / "src" / f, DOCS / "py" / f)
     for f in DATA_FILES:
         shutil.copy2(ROOT / "data" / f, DOCS / "data" / f)
 
     # A manifest the browser reads to know what to mount (kept in sync here).
+    # Deriving it from the same lists that drove the copies guarantees app.js
+    # never tries to mount a file we didn't ship.
     manifest = {
         "py": PY_FILES,
         "data": DATA_FILES,

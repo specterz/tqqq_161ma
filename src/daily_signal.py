@@ -47,6 +47,9 @@ class Signal:
 
     @property
     def action(self) -> str:
+        # Four phrasings from two booleans: above/below the MA x whether the
+        # regime flipped today. A fresh cross gets an urgent verb (RE-ENTER/SELL
+        # NOW); an unchanged regime just restates the standing instruction.
         if self.above:
             verb = "CROSSED ABOVE today — RE-ENTER / start DCA" if self.crossed_today \
                 else "ABOVE MA — keep DCA"
@@ -102,6 +105,8 @@ def compute_today(
     if len(f) < 2:
         raise SystemExit("Not enough data to compute a signal.")
 
+    # Latest row is today's confirmed signal; the row before it lets us detect a
+    # regime flip (a "crossed today" cross of the MA).
     last = f.iloc[-1]
     prev = f.iloc[-2]
     pct = float(last["qqq"] / last["ma"] - 1.0) * 100.0  # 'qqq' col == the input
@@ -111,6 +116,7 @@ def compute_today(
         ma=float(last["ma"]),
         pct_from_ma=pct,
         above=bool(last["above"]),
+        # Regime changed iff today's above-flag differs from yesterday's.
         crossed_today=bool(last["above"] != prev["above"]),
         ma_window=ma_window,
         contribution=contribution,
@@ -135,7 +141,7 @@ def send_email(subject: str, body: str, to_addr: str) -> None:
     msg.set_content(body)
 
     with smtplib.SMTP(host, port) as s:
-        s.starttls()
+        s.starttls()          # upgrade to TLS before sending credentials (587 is submission)
         s.login(user, pw)
         s.send_message(msg)
 
@@ -224,8 +230,10 @@ def main() -> None:
     if args.dry_run:
         return
 
-    sent = False
+    sent = False   # track whether any channel actually delivered
     # Discord: --discord <url>, or --discord (bare) to use DISCORD_WEBHOOK env.
+    # args.discord is None only when the flag was omitted entirely (const=""
+    # makes the bare flag an empty string, which then falls back to the env var).
     if args.discord is not None:
         url = args.discord or os.environ.get("DISCORD_WEBHOOK", "")
         if not url:

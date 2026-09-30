@@ -40,8 +40,11 @@ def _downsample(series: pd.Series, max_points: int = 800) -> dict[str, list]:
     """Thin an equity/price series to <= max_points for charting (keep ends)."""
     n = len(series)
     if n <= max_points:
-        idx = range(n)
+        idx = range(n)                    # small enough: send every point
     else:
+        # Evenly-spaced sample of `max_points` indices. Union with {n-1} so the
+        # LAST point is always kept (the final value is the headline number and
+        # must not be dropped by rounding); set() also de-dupes collisions.
         step = n / max_points
         idx = sorted({int(i * step) for i in range(max_points)} | {n - 1})
     return {
@@ -99,6 +102,8 @@ def _monthly_table(r: Any) -> dict[str, Any]:
                 cells.append(round(v * 100, 1))
             else:
                 cells.append(None)
+        # YTD compounds the months multiplicatively, (1+r1)(1+r2)...-1, not a
+        # sum; a year with no data stays None so the UI leaves it blank.
         ytd = 1.0
         for v in month_vals:
             ytd *= 1.0 + v
@@ -137,14 +142,17 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
       expenseRatio    decimal (e.g. 0.0095) or None -> default
       wantMonthly     bool -> include the MoM table for the best strategy
     """
+    # Coerce every config value coming from JS (numbers may arrive as strings/
+    # floats) into the exact types the engine expects, mirroring run.py's CLI.
     mode = config.get("mode", "lump_sum")
-    ma_windows = sorted(set(int(x) for x in config.get("ma") or [161]))
+    ma_windows = sorted(set(int(x) for x in config.get("ma") or [161]))  # de-dupe + order
     lev_in = config.get("leverage") or [3.0]
     seen: set = set()
+    # Order-preserving de-dupe (same add()-returns-None trick as run.py).
     leverages = [float(x) for x in lev_in if not (float(x) in seen or seen.add(float(x)))]
     multi_lev = len(leverages) > 1
     oh = config.get("overheating")
-    threshold = None if oh is None else float(oh) / 100.0
+    threshold = None if oh is None else float(oh) / 100.0  # percent band -> decimal
 
     start = config.get("start") or None
     end = config.get("end") or None
@@ -162,16 +170,18 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
         base_kwargs["expense_ratio"] = float(config["expenseRatio"])
 
     # Build + cache market data per leverage (data read once; only tqqq differs).
+    # No auto_update juggling like run.py needs: fetching is off for all builds.
     md_full_by_lev = {}
     for lev in leverages:
         md_full_by_lev[lev] = build_market_data(leverage=lev, **base_kwargs).slice(start, end)
-    md_full0 = md_full_by_lev[leverages[0]]
+    md_full0 = md_full_by_lev[leverages[0]]  # QQQ/signal source (leverage-independent)
 
-    warmup = max(ma_windows)
+    warmup = max(ma_windows)                  # widest MA sets the shared warmup
     if len(md_full0.frame) <= warmup:
+        # Return a structured error instead of raising: the browser renders it.
         return {"error": f"Not enough data ({len(md_full0.frame)} days) for a "
                          f"{warmup}-day MA warmup. Widen the date range."}
-    common_start = md_full0.index[warmup - 1]
+    common_start = md_full0.index[warmup - 1]  # first fully-warmed date, shared by all
     cs = common_start.strftime("%Y-%m-%d")
 
     signals_by_ma = {}
@@ -221,15 +231,18 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
             initial_lump_sum=initial_lump_sum, label="QQQ DCA"))
 
     all_results = strat_results + benchmarks
+    # Best-to-worst by annualized return, NaN sorted last (same rule as run.py).
     all_results.sort(
         key=lambda r: (r.annualized if r.annualized == r.annualized else float("-inf")),
         reverse=True,
     )
 
+    # Best *strategy* only (benchmarks excluded) -> headline label + monthly grid.
     best = max(strat_results, key=lambda r: (
         r.annualized if r.annualized == r.annualized else float("-inf")))
 
-    # Signal panel: QQQ + each MA over the window (MA computed on full history).
+    # Signal panel: QQQ + each MA over the window (MA computed on full history so
+    # it's warmed up, then clipped to the shared window before downsampling).
     qqq_full = md_full0.frame["qqq"]
     qqq_win = md0.frame["qqq"]
     signal_panel = {
@@ -264,5 +277,7 @@ def run(config: dict[str, Any]) -> dict[str, Any]:
 
 def run_json(config_json: str) -> str:
     """Convenience: accept a JSON string, return a JSON string (for Pyodide)."""
+    # app.js calls this string-in/string-out form: it's the simplest thing to
+    # marshal across the JS<->Python (Pyodide) boundary without proxy objects.
     import json
     return json.dumps(run(json.loads(config_json)))

@@ -127,17 +127,23 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
+    # sorted(set(...)) both de-dupes and orders the MA windows so the sweep and
+    # its labels are deterministic regardless of the order given on the CLI.
     ma_windows = sorted(set(args.ma))
-    leverages = args.leverage if args.leverage is not None else [3.0]
+    leverages = args.leverage if args.leverage is not None else [3.0]  # default TQQQ
     # De-dupe while preserving the given order (so labels read left-to-right).
+    # The `x in seen or seen.add(x)` trick: add() returns None (falsy), so a
+    # first-seen value passes the filter and is remembered for next time.
     seen = set()
     leverages = [x for x in leverages if not (x in seen or seen.add(x))]
-    multi_lev = len(leverages) > 1
+    multi_lev = len(leverages) > 1       # controls whether labels get an ETF prefix
 
     # Overheated rule is OFF by default; --overheating X (percent) turns it on.
+    # Convert the percent band to the decimal the strategy expects (5 -> 0.05).
     threshold = None if args.overheating is None else args.overheating / 100.0
 
     def etf_of(lev: float) -> str:
+        # Friendly ticker for the common factors; anything else shows as "2.5x".
         return {1.0: "QQQ", 2.0: "QLD", 3.0: "TQQQ"}.get(lev, f"{lev:g}x")
 
     # Base kwargs shared across every leverage build (data source + tunables).
@@ -160,19 +166,26 @@ def main() -> None:
             args.start, args.end
         )
     md_full0 = md_full_by_lev[leverages[0]]  # QQQ/signals source (leverage-independent)
+    # The longest MA in the sweep dictates the warmup: every strategy must start
+    # from the same date so the comparison is fair, so we align to the WIDEST MA.
     warmup = max(ma_windows)
     if len(md_full0.frame) <= warmup:
         raise SystemExit(f"Not enough data ({len(md_full0.frame)} days) for a "
                          f"{warmup}-day MA warmup.")
+    # First date at which even the widest MA is fully formed (index warmup-1,
+    # 0-based). All curves and signals are clipped to start here — the common start.
     common_start = md_full0.index[warmup - 1]
 
-    # Pre-compute the warmed signal per MA once (depends only on QQQ).
+    # Pre-compute the warmed signal per MA once (depends only on QQQ, not leverage),
+    # then clip to the common start so shorter MAs don't get an unfair head start.
     signals_by_ma = {}
     for ma in ma_windows:
         sf = compute_signals(
             md_full0.frame["qqq"], ma_window=ma, overheated_threshold=threshold
         )
         signals_by_ma[ma] = Signals(sf.frame[sf.frame.index >= common_start])
+    # Benchmarks only need a signal frame to share the date window; the widest
+    # MA is used so it aligns exactly with common_start.
     bench_sf = compute_signals(
         md_full0.frame["qqq"], ma_window=warmup, overheated_threshold=threshold
     )
@@ -209,6 +222,8 @@ def main() -> None:
     strat_results = []
     benchmarks = []
     md = md0  # for the chart panel (leverage-independent QQQ/MA)
+    # Nested sweep: outer over each leverage, inner over each MA window, so the
+    # full grid of (leverage x MA) strategies gets a result.
     for li, lev in enumerate(leverages):
         # Reuse the cached full series for this leverage (built + refreshed once
         # above); just slice it to the shared comparison window.
@@ -255,7 +270,8 @@ def main() -> None:
 
     results = strat_results + benchmarks
     # Sort best-to-worst by annualized return (CAGR for lump-sum, IRR for
-    # contributions). NaN annualized (degenerate fits) sorts last.
+    # contributions). NaN annualized (degenerate fits) sorts last: the
+    # `r.annualized == r.annualized` NaN test maps NaN to -inf as the sort key.
     results = sorted(
         results,
         key=lambda r: (r.annualized if r.annualized == r.annualized else float("-inf")),
@@ -263,7 +279,8 @@ def main() -> None:
     )
     print(format_results_table(results))
 
-    # Best strategy by annualized return (used for --mom and the summary line).
+    # Best *strategy* (excludes benchmarks) by annualized return — drives the
+    # summary line and the optional monthly grid.
     best = max(strat_results, key=lambda r: r.annualized)
     if len(strat_results) > 1:
         print(f"\nBest strategy by {best.annualized_kind}: {best.label} "
@@ -277,13 +294,19 @@ def main() -> None:
         return
 
     OUT_DIR.mkdir(exist_ok=True)
+    # Two stacked panels: equity curves on top (2/3 height), the QQQ-vs-MA signal
+    # panel below (1/3), sharing the x time-axis.
     fig, ax = plt.subplots(2, 1, figsize=(14, 11), height_ratios=[2, 1])
 
+    # Strategies drawn as solid bold lines; benchmarks dashed and faded so the
+    # eye separates "what we're testing" from "what we're beating".
     for r in strat_results:
         ax[0].plot(r.equity.index, r.equity.values, label=r.label, linewidth=1.4)
     for r in benchmarks:
         ax[0].plot(r.equity.index, r.equity.values, label=r.label,
                    linewidth=1.2, linestyle="--", alpha=0.7)
+    # Log scale so a 100x range reads as slope, not a hockey stick that flattens
+    # the early years into the axis.
     ax[0].set_yscale("log")
     ma_title = "/".join(str(m) for m in ma_windows)
     ax[0].set_title(

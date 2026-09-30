@@ -60,46 +60,64 @@ TRADING_DAYS = 252
 class MarketData:
     """Aligned daily series indexed by date (ascending)."""
 
-    frame: pd.DataFrame  # columns: qqq, tqqq, rf (daily risk-free), spx (VOO proxy)
+    # A single DataFrame holds every series, all sharing one date index so they
+    # line up row-for-row. Columns: qqq (index proxy), tqqq (synthetic leveraged
+    # ETF), rf (annualised risk-free rate), spx (S&P 500 / VOO proxy).
+    frame: pd.DataFrame
 
     @property
     def index(self) -> pd.DatetimeIndex:
+        # Convenience accessor so callers can write md.index instead of
+        # md.frame.index — the two are identical.
         return self.frame.index
 
     def slice(self, start: str | None = None, end: str | None = None) -> "MarketData":
-        f = self.frame
-        if start is not None:
-            f = f[f.index >= pd.Timestamp(start)]
-        if end is not None:
-            f = f[f.index <= pd.Timestamp(end)]
+        # Return a NEW MarketData restricted to [start, end]; the original is
+        # left untouched (callers slice to different windows without side effects).
+        f = self.frame                                   # start from the full frame
+        if start is not None:                            # a lower bound was given
+            f = f[f.index >= pd.Timestamp(start)]        # keep rows on/after start
+        if end is not None:                              # an upper bound was given
+            f = f[f.index <= pd.Timestamp(end)]          # keep rows on/before end
+        # .copy() so the sliced frame is independent of the parent (avoids pandas
+        # SettingWithCopy surprises if the caller later mutates it).
         return MarketData(f.copy())
 
 
 def _load_ndx(path: Path) -> pd.Series:
     """Load the Nasdaq-100 index close as an ascending float series."""
-    raw = pd.read_csv(path)
+    raw = pd.read_csv(path)                              # read the raw CSV as-is
     # The investing.com export quotes the close under "Price" with thousands
     # separators ("20,123.45"). Force to text -> strip commas -> parse float, in
     # that order, so pandas doesn't misinfer the dtype on the comma-formatted
     # strings.
     price = (
-        raw["Price"].astype(str).str.replace(",", "", regex=False).astype(float)
+        raw["Price"].astype(str)                         # ensure string dtype
+        .str.replace(",", "", regex=False)               # "20,123.45" -> "20123.45"
+        .astype(float)                                   # now safe to parse as float
     )
-    dates = pd.to_datetime(raw["Date"])
+    dates = pd.to_datetime(raw["Date"])                  # parse the Date column to timestamps
+    # Pair prices with dates into a Series, then sort ascending (the export is
+    # newest-first; every downstream calc assumes oldest-first).
     series = pd.Series(price.values, index=dates, name="ndx").sort_index()
-    # Drop any duplicate dates, keep last.
+    # A refresh can re-append today's row; drop duplicate dates, keeping the
+    # last (freshest) occurrence so there's exactly one row per trading day.
     series = series[~series.index.duplicated(keep="last")]
     return series
 
 
 def _load_riskfree(path: Path) -> pd.Series:
     """Load DGS3MO (percent) as a daily decimal-rate series, forward-filled."""
-    raw = pd.read_csv(path)
+    raw = pd.read_csv(path)                              # read the FRED CSV
+    # FRED quotes the rate in percent (e.g. 5.25); divide by 100 to a decimal
+    # (0.0525). errors="coerce" turns any non-numeric cell into NaN rather than
+    # raising — FRED uses "." for missing days.
     rate = pd.to_numeric(raw["DGS3MO"], errors="coerce") / 100.0
-    dates = pd.to_datetime(raw["observation_date"])
-    series = pd.Series(rate.values, index=dates, name="rf").sort_index()
-    series = series[~series.index.duplicated(keep="last")]
-    # FRED leaves holidays blank; carry the last known rate forward.
+    dates = pd.to_datetime(raw["observation_date"])      # FRED's date column name
+    series = pd.Series(rate.values, index=dates, name="rf").sort_index()  # ascending
+    series = series[~series.index.duplicated(keep="last")]  # one row per date
+    # FRED leaves market holidays blank (now NaN); carry the last known rate
+    # forward so every trading day has a usable rate.
     series = series.ffill()
     return series
 
@@ -109,11 +127,12 @@ def _load_spx(path: Path) -> pd.Series:
 
     This is the underlying VOO tracks; used for the overheated "ballast" sleeve.
     """
-    raw = pd.read_csv(path)
+    raw = pd.read_csv(path)                              # read the CSV
+    # Same comma-quoted "Price" format as NDX; strip commas then parse to float.
     price = raw["Price"].astype(str).str.replace(",", "", regex=False).astype(float)
-    dates = pd.to_datetime(raw["Date"])
-    series = pd.Series(price.values, index=dates, name="spx").sort_index()
-    return series[~series.index.duplicated(keep="last")]
+    dates = pd.to_datetime(raw["Date"])                  # parse dates
+    series = pd.Series(price.values, index=dates, name="spx").sort_index()  # ascending
+    return series[~series.index.duplicated(keep="last")]  # de-dupe, keep freshest
 
 
 def build_market_data(
@@ -135,6 +154,8 @@ def build_market_data(
     cached CSV; only a missing file with no network is fatal. Set
     ``auto_update=False`` for fully offline / reproducible runs.
     """
+    # Resolve each input path: use the caller's override if given, else the
+    # bundled default under <project>/data. SPX has no override (always bundled).
     ndx_path = Path(ndx_path) if ndx_path else DATA_DIR / "NDX.csv"
     tbill_path = Path(tbill_path) if tbill_path else DATA_DIR / "tbill_dgs3mo.csv"
     spx_path = DATA_DIR / "SPX.csv"
@@ -149,25 +170,29 @@ def build_market_data(
         ensure_ndx_csv(ndx_path, max_age_days=max_age_days, auto_update=True)
         ensure_spx_csv(spx_path, max_age_days=max_age_days, auto_update=True)
 
-    ndx = _load_ndx(ndx_path)
-    rf = _load_riskfree(tbill_path)
-    spx = _load_spx(spx_path)
+    ndx = _load_ndx(ndx_path)                            # Nasdaq-100 index (ascending)
+    rf = _load_riskfree(tbill_path)                      # 3-month T-bill, daily decimal
+    spx = _load_spx(spx_path)                            # S&P 500 index (VOO source)
 
-    # Align risk-free onto the trading calendar defined by the index.
+    # The index defines our trading calendar. Reindex the T-bill onto exactly
+    # those dates: ffill carries the last rate over holidays, bfill covers any
+    # gap before the first rate observation, so rf has no NaNs.
     rf = rf.reindex(ndx.index).ffill().bfill()
 
-    # QQQ proxy: normalise the index to a $100 start so levels are ETF-like.
+    # QQQ proxy: normalise the index to a $100 start so levels read like an ETF
+    # share price and are directly comparable to the synthetic TQQQ below.
     qqq = ndx / ndx.iloc[0] * 100.0
     qqq.name = "qqq"
 
-    # VOO proxy: the S&P 500 index normalised to $100, aligned to the NDX
-    # calendar (forward-filled across any missing dates). This is the ballast
-    # sleeve overheated deposits flow into.
+    # VOO proxy: the S&P 500 index aligned to the NDX calendar (ffill/bfill any
+    # missing dates), then normalised to the same $100 start. This is the
+    # ballast sleeve that overheated deposits flow into (contributions mode).
     spx = spx.reindex(ndx.index).ffill().bfill()
     voo = spx / spx.iloc[0] * 100.0
     voo.name = "spx"
 
-    # Index daily simple return.
+    # Index daily simple return, r_t = price_t / price_{t-1} - 1. First row has
+    # no prior day, so pct_change yields NaN -> fill with 0 (flat day one).
     r_index = ndx.pct_change().fillna(0.0)
 
     # Synthetic TQQQ daily return with financing + expense drag (the standard
@@ -190,19 +215,23 @@ def build_market_data(
     tqqq = (1.0 + r_tqqq).cumprod() * 100.0
     tqqq.name = "tqqq"
 
-    # Daily risk-free growth factor for the SGOV/cash sleeve.
+    # Assemble the four aligned series into one DataFrame (shared date index).
     frame = pd.DataFrame(
         {
-            "qqq": qqq,
-            "tqqq": tqqq,
-            "rf": rf,  # annualised decimal rate
-            "spx": voo,  # S&P 500 (VOO) proxy, $100 base
+            "qqq": qqq,      # index proxy, $100 base — the signal asset
+            "tqqq": tqqq,    # synthetic leveraged ETF, $100 base
+            "rf": rf,        # annualised risk-free decimal rate (cash sleeve)
+            "spx": voo,      # S&P 500 (VOO) proxy, $100 base (ballast sleeve)
         }
     )
+    # Drop any row with a NaN in any column (e.g. the MA warmup edge) so every
+    # row is fully populated before the backtest consumes it.
     frame = frame.dropna()
     return MarketData(frame)
 
 
+# Running this file directly is a quick smoke test of the data pipeline: build
+# everything and print the shape/range plus the first and last few rows.
 if __name__ == "__main__":
     md = build_market_data()
     print(f"Rows: {len(md.frame)}")
