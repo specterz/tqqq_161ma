@@ -139,16 +139,28 @@ python src/run.py --mode lump_sum --start 2011-01-01 --expense-ratio 0.0075
 ```
 TQQQ_161ma/
 ├── data/
-│   ├── NDX.csv              # Nasdaq-100 daily index (1985-2026)
-│   └── tbill_dgs3mo.csv     # 3-month T-bill rate (FRED DGS3MO)
+│   ├── NDX.csv               # Nasdaq-100 daily index (1985-2026)
+│   ├── SPX.csv               # S&P 500 daily index (VOO ballast source)
+│   ├── tbill_dgs3mo.csv      # 3-month T-bill rate (FRED DGS3MO)
+│   └── TQQQ_real_yahoo.json  # real TQQQ closes (for calibration only)
 ├── src/
-│   ├── data.py              # load data, build QQQ / synthetic TQQQ / rf
-│   ├── strategy.py          # 161-day MA signal + overheated rule
-│   ├── backtest.py          # lump-sum & contribution engines + metrics
-│   ├── calibrate.py         # fit the financing spread to real TQQQ
-│   └── run.py               # CLI + chart output
-├── data/TQQQ_real_yahoo.json  # real TQQQ closes (for calibration)
-└── results/                 # generated charts
+│   ├── data.py               # load data, build QQQ / synthetic TQQQ / rf / VOO
+│   ├── strategy.py           # 161-day MA signal + overheated rule
+│   ├── backtest.py           # lump-sum & contribution engines + metrics
+│   ├── calibrate.py          # fit the financing spread to real TQQQ
+│   ├── fetch_data.py         # download/refresh NDX + SPX from Yahoo
+│   ├── web_api.py            # JSON bridge for the browser app (mirrors run.py)
+│   ├── daily_signal.py       # daily action -> Discord/email alert
+│   └── run.py                # CLI + chart output
+├── docs/                     # Pyodide web app (GitHub Pages) + guides
+│   ├── index.html, app.js, styles.css   # mobile-friendly browser backtester
+│   ├── py/, data/            # engine + data synced here by build_web.py
+│   ├── DAILY_SIGNAL.md        # daily-alert setup
+│   └── CODE_WALKTHROUGH.md    # function-by-function tour
+├── tradingview/              # Pine Script ports (lump-sum + contributions)
+├── .github/workflows/        # daily-signal cron (fetch, alert, commit data)
+├── build_web.py              # sync src/*.py + data into docs/ for the web app
+└── results/                  # generated charts
 ```
 
 ## Usage
@@ -221,11 +233,12 @@ total if you need the old single number in code.
 **Sharpe ratio** is the annualized risk-adjusted return: mean daily excess
 return (over the T-bill) divided by daily volatility, times √252. Higher is
 better per unit of risk. Note that here **161MA has the best Sharpe of the whole
-table (0.95) — beating buy-and-hold TQQQ (0.88)**: it captures most of TQQQ's
-return with far less volatility, which is the strategy's entire point. Sharpe is
-shown as `n/a` in contribution mode, because the equity curve jumps on each
-deposit and those cash-flow jumps aren't investment returns — a Sharpe computed
-from them would be meaningless.
+table (0.94 in the sweep above) — beating buy-and-hold TQQQ (0.87)**: it
+captures most of TQQQ's return with far less volatility, which is the strategy's
+entire point. Sharpe is shown as `n/a` in contribution mode, because the equity
+curve jumps on each deposit and those cash-flow jumps aren't investment returns
+— a Sharpe computed from them would be meaningless. (Exact Sharpe values shift
+slightly as the daily data updates; the *ranking* is the durable takeaway.)
 
 All series in a sweep are aligned to a **common start date** — the warmup of
 the *longest* MA tested — so every strategy and benchmark is measured over the
@@ -250,20 +263,133 @@ an empirical echo of the Reddit post's claim that 161 is a sweet spot. The
 100-day is too twitchy (79 entries / 78 exits — the most round-trips, worst
 return); the 250-day lags entries.
 
-Options: `--ma` (one or more MA windows, default 161), `--overheating X`
-(enable the ballast rule with a +X% band — OFF by default; when on, deposits
-above MA+X% go into the VOO/S&P sleeve), `--start` / `--end`, `--initial` (lump-sum mode), `--contribution`,
-`--initial-lump-sum` (a day-one deposit in contributions mode, on top of the
-recurring contributions), `--every` (trading days between deposits),
-`--commission`, `--leverage` (one or more ETF factors: 3 = TQQQ default, 2 = QLD,
-1 = QQQ; pass several to compare, e.g. `--leverage 2 3` — note the financing
-spread is calibrated for 3x), `--no-plot`, `--format` (chart format: `svg`
-default / `png` / `pdf`), `--dpi` (raster resolution, only used for `--format png`).
+### Complete parameter reference
 
-Both `--ma` and `--leverage` accept lists and combine as a full cross-product:
-`--ma 161 200 --leverage 2 3` produces four strategy rows (QLD/TQQQ × 161/200),
-each leverage's Hold/DCA benchmark, and a shared QQQ benchmark. (The browser app
-runs one leverage at a time — use the CLI for multi-leverage sweeps.)
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--mode` | `lump_sum` / `contributions` | `lump_sum` | Invest once (lump-sum) or dollar-cost-average periodically. |
+| `--start` | `YYYY-MM-DD` | earliest data | Backtest start date. |
+| `--end` | `YYYY-MM-DD` | latest data | Backtest end date. |
+| `--initial` | float | `10000` | Starting capital (lump-sum mode). |
+| `--contribution` | float | `100` | Deposit amount (contributions mode). |
+| `--initial-lump-sum` | float | `0` | Day-one lump sum *plus* recurring deposits (contributions mode). |
+| `--every` | int | `21` | Trading days between deposits (~21 = monthly, 5 = weekly, 1 = daily). |
+| `--commission` | float | `0` | Per-rotation commission ($). Contributions mode defaults to 2 if 0. |
+| `--ma` | int(s) | `161` | One or more MA windows. Pass several to compare: `--ma 100 161 200`. |
+| `--overheating` | float | *off* | Enable the ballast rule with a +X% band. Above MA+X%, deposits go to VOO instead of TQQQ. Omit = rule off. |
+| `--leverage` | float(s) | `3` | Leveraged-ETF factor: 3 = TQQQ, 2 = QLD, 1 = QQQ. Multiple: `--leverage 2 3`. |
+| `--financing-spread` | float | `-0.004` | Financing spread over T-bill (calibrated for 3x). |
+| `--expense-ratio` | float | `0.0095` | Annual fund expense ratio. |
+| `--mom` | flag | off | Print a month-over-month return table (year×month grid + Avg footer). |
+| `--no-plot` | flag | off | Skip chart generation. |
+| `--format` | `svg`/`png`/`pdf` | `svg` | Chart file format. SVG = vector (infinite zoom). |
+| `--dpi` | int | `200` | Raster DPI (only for `--format png`). |
+| `--no-update` | flag | off | Offline mode: skip auto-download/refresh of NDX/SPX data. |
+| `--max-age-days` | float | close-aware | Calendar-day staleness rule. `0` = always refetch. Default = refetch after today's close. |
+
+`--ma` and `--leverage` combine as a full cross-product: `--ma 161 200 --leverage 2 3`
+produces four strategy rows (QLD 161MA, QLD 200MA, TQQQ 161MA, TQQQ 200MA),
+each leverage's Hold/DCA benchmark, and a shared QQQ benchmark. The browser app
+runs one leverage at a time — use the CLI for multi-leverage sweeps.
+
+### Examples — every parameter in action
+
+```bash
+# --- Mode -------------------------------------------------------------------
+# Lump-sum: invest $10,000 once, rotate TQQQ <-> cash on the 161-MA signal.
+python src/run.py --mode lump_sum --start 2011-01-01
+
+# Contributions (DCA): deposit $100 every 21 trading days (~monthly).
+python src/run.py --mode contributions --start 2015-01-01
+
+# --- Start / end dates -------------------------------------------------------
+# Backtest only 2020-2023 (the COVID crash + recovery).
+python src/run.py --mode lump_sum --start 2020-01-01 --end 2023-12-31
+
+# --- Initial capital (lump-sum) -----------------------------------------------
+# Start with $50,000 instead of the default $10,000.
+python src/run.py --mode lump_sum --initial 50000 --start 2011-01-01
+
+# --- Contribution + every (DCA) -----------------------------------------------
+# $200 every 5 trading days (~weekly).
+python src/run.py --mode contributions --contribution 200 --every 5 --start 2015-01-01
+
+# $50 every single trading day.
+python src/run.py --mode contributions --contribution 50 --every 1 --start 2020-01-01
+
+# --- Initial lump sum (DCA + day-one deposit) ---------------------------------
+# Start with $10,000 on day one, PLUS $100/month ongoing.
+python src/run.py --mode contributions --initial-lump-sum 10000 --contribution 100 --every 21
+
+# --- Commission ---------------------------------------------------------------
+# $5 per signal rotation (entry or exit).
+python src/run.py --mode lump_sum --commission 5 --start 2011-01-01
+
+# --- MA sweep -----------------------------------------------------------------
+# Compare 5 MA windows side by side, sorted best-to-worst.
+python src/run.py --mode lump_sum --ma 100 150 161 200 250 --start 2011-01-01
+
+# Single alternative: the classic 200-day MA.
+python src/run.py --mode lump_sum --ma 200 --start 2011-01-01
+
+# --- Overheating (ballast rule, off by default) --------------------------------
+# Enable with a +5% band: above MA+5%, deposits go to VOO instead of TQQQ.
+python src/run.py --mode contributions --overheating 5 --start 2011-01-01
+
+# Tighter +3% band: more deposits diverted to VOO, shallower drawdown.
+python src/run.py --mode contributions --overheating 3 --start 2011-01-01
+
+# --- Leverage ------------------------------------------------------------------
+# Model QLD (2x) instead of TQQQ (3x).
+python src/run.py --mode lump_sum --leverage 2 --start 2011-01-01
+
+# Compare 2x and 3x side by side.
+python src/run.py --mode lump_sum --leverage 2 3 --start 2011-01-01
+
+# Full cross-product: 2 leverages × 2 MAs = 4 strategy rows.
+python src/run.py --mode lump_sum --leverage 2 3 --ma 161 200 --start 2011-01-01
+
+# --- Financing spread / expense ratio -----------------------------------------
+# Conservative: +0.50% borrow assumption (original pre-calibration value).
+python src/run.py --mode lump_sum --financing-spread 0.005 --start 2011-01-01
+
+# What if the fund were cheaper (0.50% expense ratio)?
+python src/run.py --mode lump_sum --expense-ratio 0.005 --start 2011-01-01
+
+# --- Month-over-month table ---------------------------------------------------
+# Print the monthly returns grid (year × month + Avg footer) for the best strategy.
+python src/run.py --mode lump_sum --start 2020-01-01 --mom
+
+# MoM works with contributions and MA sweeps too.
+python src/run.py --mode contributions --start 2020-01-01 --ma 161 200 --mom
+
+# --- Chart format + DPI -------------------------------------------------------
+# Default is SVG (vector, infinite zoom); switch to PNG at 300 DPI.
+python src/run.py --mode lump_sum --start 2011-01-01 --format png --dpi 300
+
+# PDF output.
+python src/run.py --mode lump_sum --start 2011-01-01 --format pdf
+
+# Skip chart generation entirely.
+python src/run.py --mode lump_sum --start 2011-01-01 --no-plot
+
+# --- Data freshness -----------------------------------------------------------
+# Offline: use cached data, never touch the network.
+python src/run.py --mode lump_sum --start 2011-01-01 --no-update
+
+# Force a refetch even if data is fresh (max-age-days 0 = always stale).
+python src/run.py --mode lump_sum --start 2011-01-01 --max-age-days 0
+
+# Consider data fresh for 7 days.
+python src/run.py --mode lump_sum --start 2011-01-01 --max-age-days 7
+
+# --- Kitchen sink: many flags combined ----------------------------------------
+# DCA, $500/month + $20k lump sum, QLD + TQQQ, 161 + 200 MA, overheating 5%,
+# $2 commission, MoM table, start 2015.
+python src/run.py --mode contributions --contribution 500 --every 21 \
+    --initial-lump-sum 20000 --leverage 2 3 --ma 161 200 --overheating 5 \
+    --commission 2 --mom --start 2015-01-01
+```
 
 Charts are written to `results/` as **SVG by default** — vector graphics that
 stay razor-sharp at any zoom level (open in a browser or image viewer and zoom
