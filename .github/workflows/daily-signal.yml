@@ -12,7 +12,21 @@ name: Daily 161-MA signal
 # An odd minute (:07) avoids the most congested top-of-hour / :15 slots.
 on:
   schedule:
-    - cron: "7 21 * * 1-5"
+    # MULTIPLE ATTEMPTS to beat GitHub's cron delay. Each tick runs the job, but
+    # the --once-state dedupe means only the FIRST one to actually fire each day
+    # posts to Discord — the rest see "already alerted" and skip. So stacking
+    # attempts just makes delivery earlier/more reliable, never duplicated.
+    #
+    # UTC times. US close is 21:00 UTC (EST) / 20:00 UTC (EDT); all attempts are
+    # after it in both DST states. Same-UTC-day attempts use weekdays 1-5 (Mon-Fri):
+    - cron: "7 21 * * 1-5"    # ~4:07pm EST / 5:07pm EDT  (just after close)
+    - cron: "37 21 * * 1-5"   # +30 min
+    - cron: "7 22 * * 1-5"    # +1h
+    - cron: "7 23 * * 1-5"    # +2h
+    # Late-evening ET crosses into the NEXT UTC day, so these use weekdays 2-6
+    # (Tue-Sat) to line up with Mon-Fri evenings in ET:
+    - cron: "7 0 * * 2-6"     # ~7-8pm ET
+    - cron: "7 1 * * 2-6"     # ~8-9pm ET (final safety net)
   workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
 
 permissions:
