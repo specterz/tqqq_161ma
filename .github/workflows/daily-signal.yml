@@ -19,7 +19,7 @@ on:
     #
     # UTC times. US close is 21:00 UTC (EST) / 20:00 UTC (EDT); all attempts are
     # after it in both DST states. Same-UTC-day attempts use weekdays 1-5 (Mon-Fri):
-    - cron: "7 21 * * 1-5"    # ~4:07pm EST / 5:07pm EDT  (just after close)
+    - cron: "1 21 * * 1-5"    # ~4:07pm EST / 5:07pm EDT  (just after close)
     - cron: "37 21 * * 1-5"   # +30 min
     - cron: "7 22 * * 1-5"    # +1h
     - cron: "7 23 * * 1-5"    # +2h
