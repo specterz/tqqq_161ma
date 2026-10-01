@@ -1,13 +1,18 @@
 name: Daily 161-MA signal
 
 # Runs after the US market close on weekdays and posts the day's signal to Discord.
-# GitHub cron is UTC-only (no DST). 21:15 UTC = 4:15pm ET in winter (EST) and
-# 5:15pm ET in summer (EDT) — always safely after the 4:00pm close either way.
+# GitHub cron is UTC-only (no DST). 21:07 UTC = 4:07pm ET in winter (EST) and
+# 5:07pm ET in summer (EDT) — always safely after the 4:00pm close either way.
 # (Weekdays only: weekend runs would just re-report Friday's unchanged signal.)
-# Note: GitHub may start scheduled runs several minutes late; timing is approximate.
+#
+# IMPORTANT: GitHub schedules are best-effort and can be delayed by HOURS during
+# high load (observed ~4h late). There is no way to make cron punctual. For a
+# daily close-based signal this is cosmetic — the signal is the same whenever it
+# lands, and the --once-state dedupe makes a delayed/double-fired run harmless.
+# An odd minute (:07) avoids the most congested top-of-hour / :15 slots.
 on:
   schedule:
-    - cron: "15 21 * * 1-5"
+    - cron: "7 21 * * 1-5"
   workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
 
 permissions:
@@ -37,7 +42,10 @@ jobs:
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
-          python src/daily_signal.py --discord --contribution 100 --no-update
+          # --once-state dedupes: if GitHub double-fires or a delayed run retries
+          # on the same signal date, the second run skips instead of double-posting.
+          python src/daily_signal.py --discord --contribution 100 --no-update \
+            --once-state data/.last_signal_date
 
       # Commit the refreshed NDX.csv back to the repo so it stays daily-fresh.
       # Only commits if the file actually changed (no-op on weekends/holidays).
@@ -47,7 +55,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/NDX.csv
+          # Stage the refreshed data AND the dedupe state file (so the "already
+          # alerted today" marker persists for a later same-day run).
+          git add data/NDX.csv data/.last_signal_date
           if git diff --cached --quiet; then
             echo "No data change; nothing to commit."
             exit 0
