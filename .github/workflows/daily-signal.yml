@@ -1,32 +1,18 @@
 name: Daily 161-MA signal
 
-# Runs after the US market close on weekdays and posts the day's signal to Discord.
-# GitHub cron is UTC-only (no DST). 21:07 UTC = 4:07pm ET in winter (EST) and
-# 5:07pm ET in summer (EDT) — always safely after the 4:00pm close either way.
+# Runs once each weekday at 4:20pm ET and posts the day's signal to Discord.
+# GitHub cron is UTC-only (no DST), so a single UTC time can't be 4:20pm ET
+# year-round: 4:20pm ET is 20:20 UTC in summer (EDT) and 21:20 UTC in winter
+# (EST). We target EDT (20:20 UTC); during EST this fires at 3:20pm ET — before
+# the 4:00pm close, so it reports the prior day's confirmed signal on those days.
 # (Weekdays only: weekend runs would just re-report Friday's unchanged signal.)
 #
-# IMPORTANT: GitHub schedules are best-effort and can be delayed by HOURS during
-# high load (observed ~4h late). There is no way to make cron punctual. For a
-# daily close-based signal this is cosmetic — the signal is the same whenever it
-# lands, and the --once-state dedupe makes a delayed/double-fired run harmless.
-# An odd minute (:07) avoids the most congested top-of-hour / :15 slots.
+# NOTE: GitHub schedules are best-effort and can be delayed by HOURS under load.
+# There is no way to make cron punctual; for a daily close-based signal this is
+# cosmetic — the signal is the same whenever it lands.
 on:
   schedule:
-    # MULTIPLE ATTEMPTS to beat GitHub's cron delay. Each tick runs the job, but
-    # the --once-state dedupe means only the FIRST one to actually fire each day
-    # posts to Discord — the rest see "already alerted" and skip. So stacking
-    # attempts just makes delivery earlier/more reliable, never duplicated.
-    #
-    # UTC times. US close is 21:00 UTC (EST) / 20:00 UTC (EDT); all attempts are
-    # after it in both DST states. Same-UTC-day attempts use weekdays 1-5 (Mon-Fri):
-    - cron: "1 21 * * 1-5"    # ~4:07pm EST / 5:07pm EDT  (just after close)
-    - cron: "37 21 * * 1-5"   # +30 min
-    - cron: "7 22 * * 1-5"    # +1h
-    - cron: "7 23 * * 1-5"    # +2h
-    # Late-evening ET crosses into the NEXT UTC day, so these use weekdays 2-6
-    # (Tue-Sat) to line up with Mon-Fri evenings in ET:
-    - cron: "7 0 * * 2-6"     # ~7-8pm ET
-    - cron: "7 1 * * 2-6"     # ~8-9pm ET (final safety net)
+    - cron: "20 20 * * 1-5"   # 4:20pm ET (EDT) / 3:20pm ET (EST), Mon-Fri
   workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
 
 permissions:
@@ -58,10 +44,7 @@ jobs:
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
-          # --once-state dedupes: if GitHub double-fires or a delayed run retries
-          # on the same signal date, the second run skips instead of double-posting.
-          python src/daily_signal.py --discord --contribution 100 --no-update \
-            --once-state data/.last_signal_date
+          python src/daily_signal.py --discord --contribution 100 --no-update
 
       # Commit the refreshed NDX.csv back to the repo so it stays daily-fresh.
       # Only commits if the file actually changed (no-op on weekends/holidays).
@@ -71,9 +54,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Stage the refreshed data (NDX engine + QQQ signal) AND the dedupe
-          # state file (so the "already alerted today" marker persists).
-          git add data/NDX.csv data/QQQ.csv data/.last_signal_date
+          # Stage the refreshed data (NDX engine + QQQ signal).
+          git add data/NDX.csv data/QQQ.csv
           if git diff --cached --quiet; then
             echo "No data change; nothing to commit."
             exit 0

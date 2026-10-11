@@ -253,10 +253,6 @@ def main() -> None:
     p.add_argument("--dry-run", action="store_true", help="print only, no send")
     p.add_argument("--no-update", action="store_true",
                    help="use cached data, do not fetch")
-    p.add_argument("--once-state", metavar="FILE",
-                   help="dedupe file: skip sending if it already records the "
-                        "current signal date (prevents duplicate alerts when "
-                        "GitHub cron double-fires). Updated after a successful send.")
     args = p.parse_args()
 
     sig = compute_today(
@@ -270,17 +266,6 @@ def main() -> None:
 
     if args.dry_run:
         return
-
-    # Dedupe guard: if we've already alerted for this signal date, skip. This
-    # makes a double-fired / delayed-then-retried schedule harmless — the second
-    # run sees the date already recorded and exits without posting again.
-    if args.once_state:
-        from pathlib import Path
-        state_path = Path(args.once_state)
-        last = state_path.read_text().strip() if state_path.exists() else ""
-        if last == sig.date:
-            print(f"\n[skip] already alerted for {sig.date}; not sending again.")
-            return
 
     sent = False   # track whether any channel actually delivered
     # Discord: --discord <url>, or --discord (bare) to use DISCORD_WEBHOOK env.
@@ -302,11 +287,6 @@ def main() -> None:
 
     if not sent:
         raise SystemExit("Nothing sent. Use --discord and/or --to, or --dry-run.")
-
-    # Record the date we just alerted for, so a later same-day run skips (above).
-    if args.once_state:
-        from pathlib import Path
-        Path(args.once_state).write_text(sig.date + "\n")
 
 
 if __name__ == "__main__":
