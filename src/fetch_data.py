@@ -49,6 +49,9 @@ YAHOO_SYMBOL = "%5ENDX"
 # S&P 500 index (URL-encoded ^GSPC) — the underlying VOO tracks. Used for the
 # overheated "ballast" sleeve so it reflects real S&P 500 returns.
 SPX_SYMBOL = "%5EGSPC"
+# QQQ ETF — the actual tradable Nasdaq-100 fund. Used by the daily signal so the
+# alert shows real QQQ prices and QQQ's own 161-day MA (history back to 1999).
+QQQ_SYMBOL = "QQQ"
 YAHOO_CHART = (
     "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
     "?period1={p1}&period2={p2}&interval=1d"
@@ -304,6 +307,22 @@ def ensure_spx_csv(
     return ensure_ndx_csv(
         path, max_age_days=max_age_days, symbol=SPX_SYMBOL,
         auto_update=auto_update, verbose=verbose, label="SPX",
+    )
+
+
+def ensure_qqq_csv(
+    path: Path | str,
+    max_age_days: float | None = None,
+    auto_update: bool = True,
+    verbose: bool = True,
+) -> Path:
+    """Ensure the QQQ ETF CSV exists and is fresh. Thin wrapper over
+    :func:`ensure_ndx_csv` with the QQQ symbol and a "QQQ" log label. Same
+    merge/staleness/offline-fallback behaviour as the NDX file.
+    """
+    return ensure_ndx_csv(
+        path, max_age_days=max_age_days, symbol=QQQ_SYMBOL,
+        auto_update=auto_update, verbose=verbose, label="QQQ",
     )
 
 

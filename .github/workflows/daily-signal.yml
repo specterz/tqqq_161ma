@@ -44,10 +44,12 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      # Refresh the Nasdaq-100 data first so both the email AND the commit-back
-      # use the same freshly downloaded CSV.
-      - name: Refresh NDX data
-        run: python src/fetch_data.py --force
+      # Refresh both the NDX engine data and the QQQ signal data first, so the
+      # signal AND the commit-back use the same freshly downloaded CSVs.
+      - name: Refresh market data
+        run: |
+          python src/fetch_data.py --force                       # NDX (default)
+          python src/fetch_data.py --force --path data/QQQ.csv --symbol QQQ
 
       # Compute today's signal and post it to Discord. --no-update because the
       # step above already fetched. The webhook URL is a repo Secret:
@@ -69,9 +71,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Stage the refreshed data AND the dedupe state file (so the "already
-          # alerted today" marker persists for a later same-day run).
-          git add data/NDX.csv data/.last_signal_date
+          # Stage the refreshed data (NDX engine + QQQ signal) AND the dedupe
+          # state file (so the "already alerted today" marker persists).
+          git add data/NDX.csv data/QQQ.csv data/.last_signal_date
           if git diff --cached --quiet; then
             echo "No data change; nothing to commit."
             exit 0
