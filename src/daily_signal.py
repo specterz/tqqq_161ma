@@ -92,7 +92,7 @@ class Signal:
             f"Yesterday QQQ:     ${self.qqq_prev:,.2f}",
             f"Today QQQ:         ${self.qqq_today:,.2f} "
             f"({arrow} {self.day_change_pct:+.2f}%)",
-            f"QQQ {self.ma_window}-day MA:   ${self.ma:,.2f}",
+            f"QQQ {self.ma_window}-day MA:    ${self.ma:,.2f}",
             f"Distance from MA:  {self.pct_from_ma:+.2f}%   <-- headline",
             "",
             f"Signal:   QQQ is {'ABOVE' if self.above else 'BELOW'} its "
