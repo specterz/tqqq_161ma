@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pandas as pd
 
@@ -34,16 +34,60 @@ from data import DATA_DIR, _load_ndx
 from strategy import MA_WINDOW, compute_signals
 
 
+def _fetch_qqq_prices() -> tuple[float, float]:
+    """Fetch the two most recent QQQ daily closes from Yahoo's chart API.
+
+    Returns (yesterday_close, today_close) as floats.  Uses the same unofficial
+    Yahoo v8 chart endpoint as fetch_data.py — stdlib only, no new deps.
+    Falls back to (nan, nan) on any network or parse error so the rest of the
+    alert is never blocked by a QQQ fetch failure.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    # %5EGSPC would be S&P; QQQ is just "QQQ" (no encoding needed).
+    url = ("https://query1.finance.yahoo.com/v8/finance/chart/QQQ"
+           "?period1=1000000000&period2=9999999999&interval=1d&range=5d")
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; tqqq-161ma/1.0)",
+                 "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        closes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+        # Drop any None values (partial days), take the last two.
+        valid = [c for c in closes if c is not None]
+        if len(valid) < 2:
+            return float("nan"), float("nan")
+        return float(valid[-2]), float(valid[-1])
+    except Exception:
+        # Network blip or API change — don't let it kill the signal.
+        return float("nan"), float("nan")
+
+
 @dataclass
 class Signal:
     date: str
-    qqq: float              # NDX close (the signal source; QQQ tracks it 1:1)
+    ndx_today: float              # NDX close today (the signal source; QQQ tracks it 1:1)
+    ndx_prev: float         # NDX close yesterday (for day-over-day display)
+    qqq_today: float
+    qqq_prev: float
     ma: float
     pct_from_ma: float      # (ndx/ma - 1) * 100 — same % as QQQ vs its MA
     above: bool
     crossed_today: bool     # regime differs from the prior trading day
     ma_window: int
     contribution: float
+
+    @property
+    def day_change_pct(self) -> float:
+        """Day-over-day % change in the index (today vs yesterday)."""
+        if self.ndx_prev <= 0:
+            return 0.0
+        return (self.ndx_today / self.ndx_prev - 1.0) * 100.0
 
     @property
     def action(self) -> str:
@@ -64,11 +108,15 @@ class Signal:
                 f"— {self.date}")
 
     def body(self) -> str:
+        # Day-over-day change sign and arrow for quick scanning.
+        arrow = "▲" if self.day_change_pct >= 0 else "▼"
         lines = [
-            f"Date:            {self.date}",
-            f"NDX close:       {self.qqq:,.2f}",
-            f"{self.ma_window}-day MA:      {self.ma:,.2f}",
-            f"Distance from MA:{self.pct_from_ma:+.2f}%   <-- headline",
+            f"Date:                 {self.date}",
+            f"Yesterday NDX/QQQ:    {self.ndx_prev:,.2f} / {self.qqq_prev:,.2f}",
+            f"Today NDX/QQQ:        {self.ndx_today:,.2f} / {self.qqq_today:,.2f} "
+            f"({arrow} {self.day_change_pct:+.2f}% day-over-day)",
+            f"{self.ma_window}-day MA:           {self.ma:,.2f}",
+            f"Distance from MA:     {self.pct_from_ma:+.2f}%   <-- headline",
             "",
             f"Signal:          NDX is {'ABOVE' if self.above else 'BELOW'} its "
             f"{self.ma_window}-day MA"
@@ -78,7 +126,6 @@ class Signal:
             "Signal source: Nasdaq-100 index (NDX); QQQ tracks it, so the % "
             "distance is the same. Rule: above the MA -> DCA into TQQQ; "
             "below -> sell TQQQ to cash.",
-            "Informational only — not a trade order or financial advice.",
         ]
         return "\n".join(lines)
 
@@ -88,7 +135,7 @@ def compute_today(
     ma_window: int = MA_WINDOW,
     auto_update: bool = True,
 ) -> Signal:
-    """Refresh QQQ, compute the latest confirmed 161-MA signal."""
+    """Refresh NDX, compute the latest confirmed 161-MA signal."""
     ndx_path = DATA_DIR / "NDX.csv"
     if auto_update:
         from fetch_data import ensure_ndx_csv
@@ -110,9 +157,13 @@ def compute_today(
     last = f.iloc[-1]
     prev = f.iloc[-2]
     pct = float(last["qqq"] / last["ma"] - 1.0) * 100.0  # 'qqq' col == the input
+    qqq_daily_prices = _fetch_qqq_prices()
     return Signal(
         date=f.index[-1].strftime("%Y-%m-%d"),
-        qqq=float(last["qqq"]),
+        ndx_today=float(last["qqq"]),
+        ndx_prev=float(prev["qqq"]),          # yesterday's close for day-over-day
+        qqq_today=qqq_daily_prices[1],
+        qqq_prev=qqq_daily_prices[0],
         ma=float(last["ma"]),
         pct_from_ma=pct,
         above=bool(last["above"]),
@@ -172,9 +223,14 @@ def post_discord(sig: "Signal", webhook_url: str) -> None:
                     {"name": "Distance from MA",
                      "value": f"**{sig.pct_from_ma:+.2f}%**", "inline": True},
                     {"name": "NDX close",
-                     "value": f"{sig.qqq:,.2f}", "inline": True},
+                     "value": f"{sig.ndx_today:,.2f}", "inline": True},
                     {"name": f"{sig.ma_window}-day MA",
                      "value": f"{sig.ma:,.2f}", "inline": True},
+                    {"name": "Day-over-day",
+                     "value": (f"{'▲' if sig.day_change_pct >= 0 else '▼'} "
+                                f"{sig.day_change_pct:+.2f}%  "
+                                f"({sig.ndx_prev:,.2f} → {sig.ndx_today:,.2f})"),
+                     "inline": False},
                     {"name": "Action", "value": sig.action, "inline": False},
                 ],
                 "footer": {"text": "Informational only — not a trade order."},
